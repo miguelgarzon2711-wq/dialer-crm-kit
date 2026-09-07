@@ -5,6 +5,7 @@
 !.env.example
 *secret*
 *credential*
+!tools/check_secrets.sh
 *.key
 *.pem
 
