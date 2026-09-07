@@ -1,0 +1,501 @@
+
+########## FILE: models.py.patched
+1497-    def gestionar_finalizacion_relacion_agente_contacto(self, calificacion_cliente):
+1498-        """
+1499-        Marca como finalizada la relación entre un agente y un contacto de una campaña
+1500-        preview
+1501-        """
+1502-        try:
+1503:            # PATCH (portado de otro cliente 2026-09-03): con re-inyecciones hay varios AEC por
+1504-            # contacto+campana; tomar el activo mas reciente, si no el ultimo FINALIZADO.
+1505-            agente_en_contacto = AgenteEnContacto.objects.filter(
+1506-                contacto_id=calificacion_cliente.contacto_id,
+1507-                campana_id=self.pk,
+1508-            ).exclude(estado=AgenteEnContacto.ESTADO_FINALIZADO).order_by('-id').first()
+1509-            if agente_en_contacto is None:
+1510-                agente_en_contacto = AgenteEnContacto.objects.filter(
+1511-                    contacto_id=calificacion_cliente.contacto_id,
+1512-                    campana_id=self.pk,
+1513-                ).order_by('-id').first()
+1514-            if agente_en_contacto is None:
+1515-                raise AgenteEnContacto.DoesNotExist
+1516-        except AgenteEnContacto.DoesNotExist:
+1517-            if self.estado == self.ESTADO_FINALIZADA:
+1518-                return
+1519-            # Si la campaña no finalizó No puede quedar calificacion sin AgenteEnContacto
+1520-            self.adicionar_agente_en_contacto(
+1521-                calificacion_cliente.contacto, calificacion_cliente.agente.id,
+1522-                es_originario=calificacion_cliente.contacto.es_originario)
+1523-            agente_en_contacto = AgenteEnContacto.objects \
+1524-                .get(contacto_id=calificacion_cliente.contacto_id, campana_id=self.pk)
+1525-            agente_en_contacto.estado = AgenteEnContacto.ESTADO_FINALIZADO
+1526-            agente_en_contacto.save()
+1527-        else:
+1528-            # Si el contacto ya esta FINALIZADO, no hace falta actualizar.
+1529-            # para el caso cuando se llama al procedimiento luego de añadir un
+--
+1532-                return
+1533-            agente_en_contacto.estado = AgenteEnContacto.ESTADO_FINALIZADO
+1534-            agente_en_contacto.save()
+1535-            self.gestionar_finalizacion_por_contactos_calificados()
+1536-
+1537-    def gestionar_finalizacion_por_contactos_calificados(self):
+1538:        # PATCH: no auto-finalizar campanas Preview al agotar contactos (decisión de producto).
+1539-        # La campana queda activa esperando nuevos leads del webhook GHL.
+1540-        return
+1541-        # si todos los contactos de la campaña han sido calificados
+1542-        # o sea, tienen el valor 'estado' igual a FINALIZADO se eliminan todas
+1543-        # las entradas correspondientes a la campaña en el modelo AgenteEnContacto
+1544-        # y se marca la campaña como finalizada
+1545-        contactos_campana = AgenteEnContacto.objects.filter(campana_id=self.pk)
+1546-        n_contactos_campana = contactos_campana.count()
+1547-        n_contactos_atendidos = contactos_campana.filter(
+1548-            estado=AgenteEnContacto.ESTADO_FINALIZADO).count()
+1549-        if n_contactos_campana == n_contactos_atendidos:
+1550-            contactos_campana.delete()
+1551-            self.finalizar()
+1552-
+1553-    def adicionar_agente_en_contacto(self, contacto, agente_id, es_originario=True):
+1554-        """Crea una nueva entrada para relacionar un agentes y un contacto
+1555-        nuevo a una campaña preview
+1556-        """
+1557-        metadata = self.bd_contacto.get_metadata()
+1558-        campos_contacto = metadata.nombres_de_columnas_de_datos
+1559-        datos_contacto = literal_eval(contacto.datos)
+1560-        datos_contacto = dict(zip(campos_contacto, datos_contacto))
+1561-        datos_contacto_json = json.dumps(datos_contacto)
+1562-        orden = AgenteEnContacto.ultimo_id() + 1
+1563-        return AgenteEnContacto.objects.create(
+1564-            agente_id=agente_id, contacto_id=contacto.pk, datos_contacto=datos_contacto_json,
+--
+3033-                if CalificacionCliente.objects.filter(
+3034-                        contacto=contacto, opcion_calificacion__campana=campana).exists():
+3035-                    raise ValidationError(msg_validation_error)
+3036-
+3037-    def save(self, *args, **kwargs):
+3038-        self._validar_unicidad_calificacion()
+3039:        # PATCH GATE (2026-09-03): validar la disposicion ANTES de finalizar la relacion
+3040-        # agente-contacto; si se rechaza, el lead sigue en pantalla del agente.
+3041-        try:
+3042-            from api_app.views.crm_dispositions import validar_gate as _kit_validar_gate
+3043-        except Exception:
+3044-            _kit_validar_gate = None
+3045-        if _kit_validar_gate is not None:
+3046-            _kit_validar_gate(self)
+3047-        # Finalizar relacion de contacto con agente
+3048-        # Optimizacion: si ya hay calificacion ya se termino la relacion agente contacto antes.
+3049-        campana = self.opcion_calificacion.campana
+3050-        contacto = self.contacto
+3051-        if campana.type == Campana.TYPE_PREVIEW:
+3052-            campana.gestionar_finalizacion_relacion_agente_contacto(self)
+3053-        # gestionamos las agendas
+3054-        if self.opcion_calificacion.tipo != OpcionCalificacion.AGENDA:
+3055-            # eliminamos las agendas existentes (si hubiera alguna)
+3056-            AgendaContacto.objects.filter(
+3057-                agente=self.agente, contacto=contacto,
+3058-                campana=campana,
+3059-                tipo_agenda=AgendaContacto.TYPE_PERSONAL).delete()
+3060-        elif campana.type != Campana.TYPE_DIALER and \
+3061-                not self.agente.permite_agenda_personal(contacto, campana):
+3062-            raise ValidationError(_('Ud. ya ha alcanzado el número límite de Agendas Personales.'
+3063-                                    'Consulte con su Administrador'))
+3064-        super(CalificacionCliente, self).save(*args, **kwargs)
+3065-
+--
+3782-        agente_en_contacto.estado = AgenteEnContacto.ESTADO_ASIGNADO
+3783-        agente_en_contacto.save()
+3784-        return True
+3785-
+3786-    @classmethod
+3787-    def entregar_contacto(cls, agente, campana_id):
+3788:        # PATCH BOTON UNIFICADO (2026-08-22): cualquier boton entrega el lead de
+3789-        # mayor prioridad global entre TODAS las campanas Preview activas del agente.
+3790-        try:
+3791-            from django.db import connection as _kit_conn
+3792-            with _kit_conn.cursor() as _cur:
+3793-                _cur.execute(
+3794-                    "SELECT DISTINCT split_part(id_campana,'_',1)::int "
+3795-                    "FROM queue_member_table WHERE member_id=%s", [agente.id])
+3796-                _mis_camps = [r[0] for r in _cur.fetchall()]
+3797-            _mis_camps = list(Campana.objects.filter(
+3798-                id__in=_mis_camps, estado=Campana.ESTADO_ACTIVA,
+3799-                type=Campana.TYPE_PREVIEW).values_list('id', flat=True))
+3800-            if _mis_camps:
+3801-                _pend = AgenteEnContacto.objects.filter(
+3802-                    agente_id=agente.id, campana_id__in=_mis_camps,
+3803-                    estado__in=[AgenteEnContacto.ESTADO_ASIGNADO,
+3804-                                AgenteEnContacto.ESTADO_ENTREGADO]).first()
+3805-                if _pend is not None:
+3806-                    campana_id = _pend.campana_id
+3807-                else:
+3808-                    _best = AgenteEnContacto.objects.filter(
+3809-                        campana_id__in=_mis_camps,
+3810-                        estado=AgenteEnContacto.ESTADO_INICIAL,
+3811-                        agente_id__in=[-1, agente.id],
+3812-                    ).order_by('orden', 'id').first()
+3813-                    if _best is not None:
+3814-                        campana_id = _best.campana_id
+--
+3823-        if contacto_asignado.exists():
+3824-            agente_en_contacto = contacto_asignado[0]
+3825-            data = model_to_dict(agente_en_contacto)
+3826-            datos_contacto = literal_eval(data['datos_contacto'])
+3827-            data['datos_contacto'] = \
+3828-                {x: datos_contacto[x] for x in datos_contacto if x not in campos_ocultos}
+3829:            # PATCH GHL_ID: preservar id_externo en la tarjeta (boton Ir al CRM)
+3830-            try:
+3831-                _ce = Contacto.objects.filter(id=data.get('contacto_id')).values_list('id_externo', flat=True).first()
+3832-                if _ce and 'GHL_ID' not in data['datos_contacto']:
+3833-                    data['datos_contacto']['GHL_ID'] = _ce
+3834-            except Exception:
+3835-                pass
+3836-            data['result'] = 'OK'
+3837-            data['code'] = 'contacto-asignado'
+3838-            return data
+3839-
+3840-        # Si no tiene un contacto asignado, asignarle otro
+3841-
+3842-        # Si el agente tiene algún contacto entregado previamente se libera para
+3843-        # que pueda ser entregado a otros agentes de la campaña
+3844-        __, orden = cls.liberar_contacto(agente.id, campana_id)
+3845-
+3846-        # obtiene el orden de la ultimo asignacion entregada al agente
+3847-        # (-1 si no tenía ninguno asignado y le asigna consecutivamente
+3848-        # a partir los numeros de orden superiores o iguales a este
+3849-        numero_agentes_contacto = AgenteEnContacto.objects.filter(campana_id=campana_id).count()
+3850-        orden = (orden + 1) % (numero_agentes_contacto + 1)
+3851-        try:
+3852-            qs_agentes_contactos_no_orden = cls.objects.activos(
+3853-                campana_id=campana_id).filter(
+3854-                    agente_id__in=[-1, agente.pk], estado=AgenteEnContacto.ESTADO_INICIAL)
+3855-
+3856-            # encuentra y devuelve el contacto a asignar al
+3857-            # de acuerdo al orden definido en el atributo 'orden'
+3858-            # desde la lista de los contactos disponibles para el agente
+3859:            # PATCH PRIORIDAD PURA (como otro cliente)
+3860-            qs_agentes_contactos = qs_agentes_contactos_no_orden \
+3861-                .order_by('orden', 'id') \
+3862-                .select_for_update(skip_locked=True) \
+3863-                .first()
+3864-
+3865-            if not qs_agentes_contactos:
+3866-                qs_agentes_contactos = qs_agentes_contactos_no_orden \
+3867-                    .select_for_update(skip_locked=True) \
+3868-                    .first()
+3869-        except DatabaseError:
+3870-            return {'result': 'Error',
+3871-                    'code': 'error-concurrencia',
+3872-                    'data': 'Contacto siendo accedido por más de un agente'}
+3873-
+3874-        if qs_agentes_contactos:
+3875-
+3876-            agente_en_contacto = qs_agentes_contactos
+3877-            agente_en_contacto.estado = AgenteEnContacto.ESTADO_ENTREGADO
+3878-            agente_en_contacto.agente_id = agente.id
+3879-            agente_en_contacto.save()
+3880-            data = model_to_dict(agente_en_contacto)
+3881-            datos_contacto = literal_eval(data['datos_contacto'])
+3882-            data['datos_contacto'] = \
+3883-                {x: datos_contacto[x] for x in datos_contacto if x not in campos_ocultos}
+3884:            # PATCH GHL_ID: preservar id_externo en la tarjeta (boton Ir al CRM)
+3885-            try:
+3886-                _ce = Contacto.objects.filter(id=data.get('contacto_id')).values_list('id_externo', flat=True).first()
+3887-                if _ce and 'GHL_ID' not in data['datos_contacto']:
+3888-                    data['datos_contacto']['GHL_ID'] = _ce
+3889-            except Exception:
+3890-                pass
+3891-            data['result'] = 'OK'
+3892-            data['code'] = 'contacto-entregado'
+3893-            return data
+3894-
+3895-        else:
+3896-            return {'result': 'Error',
+3897-                    'code': 'error-no-contactos',
+3898-                    'data': 'No hay contactos para asignar en esta campaña'}
+3899-
+3900-    @classmethod
+3901-    def liberar_contacto(cls, agente_id, campana_id):
+3902-        qs_agente_en_contacto = cls.objects.contacto_asignado(agente_id, campana_id)
+3903-        if qs_agente_en_contacto.exists():
+3904-            agente_en_contacto = qs_agente_en_contacto.first()
+3905-            agente_en_contacto.estado = AgenteEnContacto.ESTADO_INICIAL
+3906-            agente_en_contacto.agente_id = -1
+3907-            agente_en_contacto.save()
+3908-            return True, agente_en_contacto.orden
+3909-        return False, -1
+3910-
+
+########## FILE: views_campana_preview.py.patched
+504-        calificacion_pendiente_agente = redis_connection.hgetall(
+505-            'OML:CALIFICACION:LLAMADA:{0}'.format(self.agente.pk))
+506-        if calificacion_pendiente_agente != {} and \
+507-           calificacion_pendiente_agente.get('TELEFONO', '') == data_entrega.get(
+508-               'telefono_contacto', False):
+509-            data_entrega['calldata'] = calificacion_pendiente_agente['CALLDATA']
+510:        # PATCH MASCARA (decisión de producto): el agente solo ve los ultimos 4 digitos del
+511-        # telefono en la tarjeta; la llamada sale por pk_contacto (el numero real queda en el server).
+512-        try:
+513-            _t = str(data_entrega.get('telefono_contacto') or '')
+514-            if len(_t) >= 4:
+515-                data_entrega['telefono_contacto'] = '***-***-' + _t[-4:]
+516-        except Exception:
+517-            pass
+518-        return JsonResponse(data_entrega)
+519-
+520-
+521-class AgenteEnContactoResourceExport(resources.ModelResource):
+522-
+523-    class Meta:
+524-        model = AgenteEnContacto
+525-        fields = ('id', 'agente_id', 'contacto_id', 'telefono_contacto', 'datos_contacto')
+526-        export_order = ('id', 'agente_id', 'contacto_id', 'telefono_contacto', 'datos_contacto')
+527-
+528-
+529-class AgenteEnContactoResourceImport(resources.ModelResource):
+530-
+531-    def before_import_row(self, row, **kwargs):
+532-        telefono_contacto = row.get('phone')
+533-        agente_id = row.get('agent_id')
+534-        contacto_id = row.get('contact_id')
+535-        nombres_columnas_datos = kwargs.get('nombres_columnas_datos')
+536-        datos_contacto = {}
+
+########## FILE: views_agente.py.patched
+192-        # TODO: DEJAR DE MANDAR pk_agente
+193-        # TODO: DEJAR DE MANDAR tipo_campana
+194-        agente = self.request.user.get_agente_profile()
+195-        click2call_type = request.POST.get('click2call_type', 'false')
+196-        campana_id = request.POST.get('pk_campana')
+197-        telefono = request.POST.get('telefono', '')
+198:        # PATCH MASCARA (2026-09-03): si llega enmascarado (***-***-1234), se usa el real del contacto
+199-        if isinstance(telefono, str) and telefono.startswith('***'):
+200-            telefono = ''
+201-
+202-        # Patch: Para deectar que hubo un error cuando se le pega por AJAX...
+203-        self.no_redirect = request.POST.get('404_on_error')
+204-
+205-        # Si el pk es 0 es porque no se quiere identificar al contacto.
+206-        # El tipo de click2call no será "preview".
+207-        contacto_id = request.POST['pk_contacto']
+208-        if not contacto_id == '-1':
+209-            try:
+210-                contacto = Contacto.objects.get(pk=contacto_id)
+211-            except Contacto.DoesNotExist:
+212-                message = _(
+213-                    u'No es posible llamar al contacto. No se pudo identificar al contacto.')
+214-                return self.error_return_value('view_blanco', message)
+215-
+216-        if not telefono:
+217-            if not contacto:
+218-                message = _(
+219-                    u'No es posible llamar al contacto. No se pudo identificar un teléfono.')
+220-                return self.error_return_value('view_blanco', message)
+221-            telefono = contacto.telefono
+222-
+223-        if campana_id == '':
+224-            calificacion_cliente = CalificacionCliente.objects.filter(
+--
+244-                    message = _(u'No es posible llamar al contacto.'
+245-                                ' Para poder llamar un contacto debe obtenerlo'
+246-                                ' desde el menu de Campañas Preview.'
+247-                                ' Asegurese de no haber perdido la reserva')
+248-                    return self.error_return_value('campana_preview_activas_miembro', message)
+249-
+250:        # PATCH DIGITOS (2026-09-05): la central solo marca digitos; un "+" o un espacio
+251-        # hacia morir la llamada sin aviso. Se limpia aqui pase lo que pase con el dato.
+252-        import re as _re
+253-        telefono = _re.sub(r'\D', '', str(telefono or ''))
+254-        if len(telefono) == 11 and telefono.startswith('1'):
+255-            telefono = telefono[1:]
+256-        originator = Click2CallOriginator()
+257-        originator.call_originate(
+258-            agente, campana_id, tipo_campana, contacto_id, telefono, click2call_type)
+259-        return HttpResponseRedirect(reverse('view_blanco'))
+260-
+261-    def error_return_value(self, view_name, message):
+262-        if self.no_redirect:
+263-            raise Http404(message)
+264-        else:
+265-            messages.warning(self.request, message)
+266-            return HttpResponseRedirect(reverse(view_name))
+267-
+268-
+269-class LlamarFueraDeCampanaView(RedirectView):
+270-    """
+271-    Esta vista realiza originate hacia Asterisk para llamar por fuera de una campaña
+272-    """
+273-
+274-    pattern_name = 'view_blanco'
+275-
+276-    def post(self, request, *args, **kwargs):
+
+########## FILE: views_calificacion_cliente.py.patched
+154-            call_data_json = kwargs['call_data_json']
+155-            self.call_data = json.loads(call_data_json)
+156-            self.campana = Campana.objects.get(pk=self.call_data['id_campana'])
+157-            telefono = self.call_data['telefono']
+158-            if self.call_data['id_contacto']:
+159-                id_contacto = self.call_data['id_contacto']
+160:            # PATCH MASCARA WEBPHONE (2026-09-03): el webphone entrega el telefono enmascarado
+161-            # (XXXXXX1234 / ***-***-1234); sin esto la vista lo tomaba como "numero privado" y
+162-            # descartaba el contacto (formulario en blanco, sin nombre ni boton de llamar).
+163-            if isinstance(telefono, str) and (telefono.startswith('XXXXXX') or telefono.startswith('***')):
+164-                _c = None
+165-                if id_contacto and str(id_contacto) != '-1':
+166-                    _c = Contacto.objects.filter(pk=id_contacto).first()
+167-                telefono = _c.telefono if _c else ''
+168-                self.call_data['telefono'] = telefono
+169-
+170-            if id_contacto is None or id_contacto == '-1':
+171-                callid = self.call_data['call_id']
+172-                call_contact_cache = CallContactCache()
+173-                # Busco si la llamada ya está asociada a un contacto
+174-                id_contacto = call_contact_cache.get_call_contact_id(callid)
+175-                # Me aseguro que si hay contacto, exista en la base de datos de esta campaña
+176-                if id_contacto:
+177-                    if not self.campana.bd_contacto.contactos.filter(id=id_contacto).exists():
+178-                        id_contacto = None
+179-                    else:
+180-                        notificar_contacto_existente = True
+181-        else:
+182-            self.campana = Campana.objects.get(pk=kwargs['pk_campana'])
+183-            telefono = kwargs.get('telefono', False)
+184-
+185-        if 'pk_contacto' in kwargs:
+186-            id_contacto = kwargs['pk_contacto']
+--
+451-            llamada_entrante=formulario_llamada_entrante,
+452-            call_data=self.call_data,
+453-            extra_client_data=extra_client_data,
+454-            configuracion_sitio_externo=json.dumps(self.configuracion_sitio_externo)))
+455-
+456-    def post(self, request, *args, **kwargs):
+457:        # PATCH MASCARA (2026-09-03): el formulario muestra el telefono como ***-***-1234;
+458-        # aqui se restaura el numero real del contacto antes de validar/guardar.
+459-        try:
+460-            if getattr(self, 'contacto', None) is not None:
+461-                _p = request.POST.copy(); _chg = False
+462-                for _k in list(_p.keys()):
+463-                    _v = _p.get(_k)
+464-                    if isinstance(_v, str) and _v.startswith('***-***-'):
+465-                        _p[_k] = self.contacto.telefono; _chg = True
+466-                if _chg:
+467-                    request.POST = _p
+468-        except Exception:
+469-            pass
+470-        """
+471-        Valida formulario de Contacto y de CalificacionCliente
+472-        """
+473-        contacto_form = self.get_contacto_form()
+474-        calificacion_form = self.get_form()
+475-        contacto_form_valid = contacto_form.is_valid()
+476-        calificaciones_telefonos_qs = CalificacionTelefono.objects.filter(
+477-            campana=self.campana, contacto=self.contacto)
+478-        calificaciones_telefonos_formset = CalificacionTelefonoModelFormSetInit(
+479-            request.POST,
+480-            queryset=calificaciones_telefonos_qs)
+481-        calificaciones_telefonos_formset_valid = calificaciones_telefonos_formset.is_valid()
+482-        calificacion_form_valid = calificacion_form.is_valid()
+483-        con_calificacion_previa = bool(calificacion_form.instance.id)
+
+########## FILE: forms_base.py.patched
+1212-                choices = (EMPTY_CHOICE,) + tuple(
+1213-                    (nombre, nombre) for nombre in
+1214-                    self.instance.opcion_calificacion.subcalificaciones)
+1215-                self.fields['subcalificacion'] = forms.ChoiceField(
+1216-                    choices=choices, required=False,
+1217-                    widget=forms.Select(attrs={'class': 'form-control'}))
+1218:        # PATCH ORDEN (decisión de producto): disposiciones en orden alfabetico
+1219-        self.fields['opcion_calificacion'].queryset = campana.opciones_calificacion.filter(filtro).order_by('nombre')
+1220-        self.fields['nombre_subcalificaciones'].initial = json.dumps(
+1221-            list(campana.opciones_calificacion.values("id", "subcalificaciones"))
+1222-        )
+1223-
+1224-    def clean_opcion_calificacion(self):
+1225-        opcion = self.cleaned_data.get('opcion_calificacion')
+1226-        if self.es_auditoria:
+1227-            if 'opcion_calificacion' in self.changed_data and opcion.es_agenda():
+1228-                raise forms.ValidationError(
+1229-                    _('Sólo el Agente puede cambiar la calificacion a Agenda.'))
+1230-        else:
+1231-            if 'opcion_calificacion' in self.changed_data and opcion.oculta:
+1232-                raise forms.ValidationError(
+1233-                    _('No puede elegir una opción de calificacion oculta.'))
+1234-        return opcion
+1235-
+1236-
+1237-class GrupoAgenteForm(forms.Form):
+1238-    grupo = forms.ChoiceField(choices=(), widget=forms.Select(attrs={'class': 'form-control'}))
+1239-
+1240-    def __init__(self, *args, **kwargs):
+1241-        super(GrupoAgenteForm, self).__init__(*args, **kwargs)
+1242-        grupo_choice = [(grupo.id, grupo.nombre)
+1243-                        for grupo in Grupo.objects.all()]
+1244-        self.fields['grupo'].choices = grupo_choice
+
+########## FILE: oml_settings_local.py.patched
+191-EMAIL_PORT = int(os.getenv("EMAIL_PORT", 25))
+192-EMAIL_SSL_CERTFILE = os.getenv("EMAIL_SSL_CERTFILE", None)
+193-EMAIL_SSL_KEYFILE = os.getenv("EMAIL_SSL_KEYFILE", None)
+194-EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", False) == "True"
+195-EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", False) == "True"
+196-
+197:# PATCH: dominio propio (sin esto todo POST via el dominio da 403)
+198-CSRF_TRUSTED_ORIGINS = ["https://dialer.example.com", "https://stats.example.com"]
+199-
+200:# PATCH token: API token dura 1 anio (webhooks GHL; production.py pone 9h)
+201-TOKEN_EXPIRED_AFTER_SECONDS = 31536000
+
+########## FILE: campanasPreviewAgente.js.patched
+65-    $.post(url)
+66-        .success(function (data) {
+67-            if (data['result'] != 'OK') {
+68-                informarError(data, idCampana);
+69-            }
+70-            else {                // se obtienen los datos del contacto
+71:                var campEfectiva = data['campana_id'] || idCampana; // PATCH boton unificado
+72-                $('#validar_contacto').show();
+73-                $panelContacto.attr('class', 'col-md-4 col-md-offset-1');
+74-                // actualizamos el teléfono del contacto
+75-                var contactoTelefono = data['telefono_contacto'];
+76-                $contactoTelefono.text(contactoTelefono);
+77-                $inputContacto.attr('value', data['contacto_id']);
+78-                $inputCampana.attr('value', campEfectiva);
+79-
+80-                // Limpiamos la información de algún contacto anterior
+81-                $contactoOtrosDatos.html('');
+82-
+83-                if (data['code'] == 'contacto-asignado'){
+84-                    $errorAsignacionContacto.html(gettext('Contacto asignado por llamado previo.\
+85-Califique el contacto o liberelo para poder recibir un nuevo contacto.'));
+86-                    $('#liberar_contacto').show();
+87-                    $('#calificar_contacto').show();
+88-                    var url_parameters = [campEfectiva, data['contacto_id'], data['agente_id']];
+89-                    var call_data_json = data['calldata'];
+90-                    var calificar_contacto_url = Urls.calificacion_formulario_update_or_create(
+91-                        '0000', '1111');
+92-                    if (call_data_json !== undefined){
+93-                        calificar_contacto_url = calificar_contacto_url + encodeURIComponent(call_data_json);
+94-                    }
+95-                    var calificar_url = set_url_parameters(calificar_contacto_url, url_parameters);
+96-                    $('#calificar_contacto').attr('href', calificar_url);
+97-                }
+--
+245-        if (ultimaCampPreviewSeleccionada != null){
+246-            pedirContacto(ultimaCampPreviewSeleccionada);
+247-        }
+248-    }
+249-}
+250-
+251:// PATCH BOTON UNICO (2026-08-22): si el agente tiene varias campanas Preview,
+252-// se muestra UN solo boton — cualquiera entrega el mejor lead global (backend unificado).
+253-$(function() {
+254-    function aleUnificarBotones() {
+255-        var $btns = $('.obtener-contacto');
+256-        if ($btns.length > 1) {
+257-            $btns.slice(1).each(function() { $(this).closest('tr').hide(); });
+258-        }
+259-    }
+260-    setTimeout(aleUnificarBotones, 400);
+261-    $('#campanasPreviewTable').on('draw.dt', aleUnificarBotones);
+262-});

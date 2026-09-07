@@ -1,0 +1,22 @@
+# Credenciales — nunca subir
+.env
+.env_dialer
+*.env
+!.env.example
+*secret*
+*credential*
+*.key
+*.pem
+
+# Datos de clientes
+numeros*.txt
+leads*.json
+backfill*.json
+*.csv
+
+# Basura de sistema
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+*.bak_*

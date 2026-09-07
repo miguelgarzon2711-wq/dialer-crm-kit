@@ -1,0 +1,63 @@
+# -*- coding: utf-8 -*-
+"""
+Inyecta en el dialer la lista de /tmp/backfill_leads.json (generada por backfill_prepare.py).
+Corre dentro de Django: manage.py shell -c "exec(open('/tmp/backfill_inject.py').read())"
+Variables de entorno: BACKFILL_DRY=1 (solo cuenta), BACKFILL_MODO=asignar|pool
+  asignar: bucket 'asignado' -> cola del vendedor que ya le respondio (si esta en el dialer); resto -> pool
+  pool:    todo al pool (todos los vendedores)
+"""
+import json, os
+from django.db import connection
+from ominicontacto_app.models import Contacto, BaseDatosContacto, AgenteEnContacto, AgenteProfile
+from api_app.views.crm_webhooks import _inject_in_preview, _normalize_phone, CAMPANAS, DB_ID
+from api_app.views import lead_ownership
+
+DRY = os.environ.get("BACKFILL_DRY", "1") == "1"
+MODO = os.environ.get("BACKFILL_MODO", "asignar")
+leads = json.load(open("/tmp/backfill_leads.json"))
+with connection.cursor() as cur:
+    cur.execute("SELECT ghl_user_id, agente_id FROM dialer_agent_crm_map")
+    ghl2agente = {r[0]: r[1] for r in cur.fetchall()}
+activos = set(AgenteProfile.objects.filter(borrado=False, is_inactive=False).values_list("id", flat=True))
+bd = BaseDatosContacto.objects.get(id=DB_ID)
+res = {"total": len(leads), "inyectados": 0, "asignados_a_vendedor": 0, "al_pool": 0, "ya_en_cola": 0, "con_dueno": 0, "errores": 0, "por_campana": {}}
+for l in leads:
+    camp_id = CAMPANAS.get(l["campana"], 1)
+    res["por_campana"][l["campana"]] = res["por_campana"].get(l["campana"], 0) + 1
+    contacto = Contacto.objects.filter(bd_contacto_id=DB_ID, id_externo=l["ghl_id"]).first()
+    agente_dest = -1
+    if MODO == "asignar" and l["bucket"] == "asignado":
+        ag = ghl2agente.get(l.get("seller_ghl") or "")
+        if ag in activos:
+            agente_dest = ag
+    if contacto and lead_ownership.get_owner(contacto.id) > 0:
+        res["con_dueno"] += 1          # ya tiene dueno: la inyeccion respeta al dueno
+    if contacto and AgenteEnContacto.objects.filter(contacto_id=contacto.id, campana_id__in=[1, 2, 3, 4, 5],
+                                                    estado__in=[0, 1, 3]).exists():
+        res["ya_en_cola"] += 1
+        if DRY: continue
+    if DRY:
+        res["inyectados"] += 1
+        if agente_dest > 0: res["asignados_a_vendedor"] += 1
+        else: res["al_pool"] += 1
+        continue
+    try:
+        if contacto is None:
+            contacto = Contacto.objects.create(telefono=_normalize_phone(l["phone"]), datos=json.dumps([l["nombre"], "Seguimiento"]),
+                                               id_externo=l["ghl_id"], bd_contacto=bd, es_originario=False)
+        else:
+            contacto.datos = json.dumps([l["nombre"], "Seguimiento"]); contacto.save(update_fields=["datos"])
+        ok = _inject_in_preview(contacto.id, contacto.telefono, l["nombre"], camp_id, ghl_id=l["ghl_id"], tipo="Seguimiento")
+        if not ok:
+            res["errores"] += 1; continue
+        res["inyectados"] += 1
+        if agente_dest > 0 and lead_ownership.get_owner(contacto.id) <= 0:
+            n = AgenteEnContacto.objects.filter(contacto_id=contacto.id, campana_id__in=[1, 2, 3, 4, 5], estado=0, agente_id=-1).update(agente_id=agente_dest)
+            if n: res["asignados_a_vendedor"] += 1
+            else: res["al_pool"] += 1
+        else:
+            res["al_pool"] += 1
+    except Exception as e:
+        res["errores"] += 1
+        print("ERROR", l["ghl_id"], e)
+print("BACKFILL", "DRY-RUN" if DRY else "EJECUTADO", "modo=%s" % MODO, json.dumps(res, ensure_ascii=False))
