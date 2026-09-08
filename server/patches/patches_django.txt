@@ -2,8 +2,8 @@
 ########## FILE: models.py.patched
 1497-    def gestionar_finalizacion_relacion_agente_contacto(self, calificacion_cliente):
 1498-        """
-1499-        Marca como finalizada la relación entre un agente y un contacto de una campaña
-1500-        preview
+1499-        Marks as finished the relationship between an agent and a preview
+1500-        campaign's contact
 1501-        """
 1502-        try:
 1503:            # PATCH (ported from another client 2026-09-03): with re-injections there are several AEC per
@@ -56,8 +56,8 @@
 1551-            self.finalizar()
 1552-
 1553-    def adicionar_agente_en_contacto(self, contacto, agente_id, es_originario=True):
-1554-        """Crea una nueva entrada para relacionar un agentes y un contacto
-1555-        nuevo a una campaña preview
+1554-        """Creates a new entry to relate an agent and a new contact
+1555-        to a preview campaign
 1556-        """
 1557-        metadata = self.bd_contacto.get_metadata()
 1558-        campos_contacto = metadata.nombres_de_columnas_de_datos
@@ -97,8 +97,8 @@
 3059-                tipo_agenda=AgendaContacto.TYPE_PERSONAL).delete()
 3060-        elif campana.type != Campana.TYPE_DIALER and \
 3061-                not self.agente.permite_agenda_personal(contacto, campana):
-3062-            raise ValidationError(_('Ud. ya ha alcanzado el número límite de Agendas Personales.'
-3063-                                    'Consulte con su Administrador'))
+3062-            raise ValidationError(_('You have already reached the limit number of Personal Schedules.'
+3063-                                    'Contact your Administrator'))
 3064-        super(CalificacionCliente, self).save(*args, **kwargs)
 3065-
 --
@@ -185,7 +185,7 @@
 3869-        except DatabaseError:
 3870-            return {'result': 'Error',
 3871-                    'code': 'error-concurrencia',
-3872-                    'data': 'Contacto siendo accedido por más de un agente'}
+3872-                    'data': 'Contact being accessed by more than one agent'}
 3873-
 3874-        if qs_agentes_contactos:
 3875-
@@ -211,7 +211,7 @@
 3895-        else:
 3896-            return {'result': 'Error',
 3897-                    'code': 'error-no-contactos',
-3898-                    'data': 'No hay contactos para asignar en esta campaña'}
+3898-                    'data': 'No contacts to assign in this campaign'}
 3899-
 3900-    @classmethod
 3901-    def liberar_contacto(cls, agente_id, campana_id):
@@ -282,23 +282,23 @@
 210-                contacto = Contacto.objects.get(pk=contacto_id)
 211-            except Contacto.DoesNotExist:
 212-                message = _(
-213-                    u'No es posible llamar al contacto. No se pudo identificar al contacto.')
+213-                    u'It is not possible to call the contact. The contact could not be identified.')
 214-                return self.error_return_value('view_blanco', message)
 215-
 216-        if not telefono:
 217-            if not contacto:
 218-                message = _(
-219-                    u'No es posible llamar al contacto. No se pudo identificar un teléfono.')
+219-                    u'It is not possible to call the contact. A phone number could not be identified.')
 220-                return self.error_return_value('view_blanco', message)
 221-            telefono = contacto.telefono
 222-
 223-        if campana_id == '':
 224-            calificacion_cliente = CalificacionCliente.objects.filter(
 --
-244-                    message = _(u'No es posible llamar al contacto.'
-245-                                ' Para poder llamar un contacto debe obtenerlo'
-246-                                ' desde el menu de Campañas Preview.'
-247-                                ' Asegurese de no haber perdido la reserva')
+244-                    message = _(u'It is not possible to call the contact.'
+245-                                ' To call a contact you must get it'
+246-                                ' from the Preview Campaigns menu.'
+247-                                ' Make sure you have not lost the reservation')
 248-                    return self.error_return_value('campana_preview_activas_miembro', message)
 249-
 250:        # PATCH DIGITS (2026-09-05): the PBX only dials digits; a "+" or a space
@@ -322,7 +322,7 @@
 268-
 269-class LlamarFueraDeCampanaView(RedirectView):
 270-    """
-271-    Esta vista realiza originate hacia Asterisk para llamar por fuera de una campaña
+271-    This view performs an originate to Asterisk to call outside of a campaign
 272-    """
 273-
 274-    pattern_name = 'view_blanco'
@@ -384,7 +384,7 @@
 468-        except Exception:
 469-            pass
 470-        """
-471-        Valida formulario de Contacto y de CalificacionCliente
+471-        Validates the Contacto and CalificacionCliente forms
 472-        """
 473-        contacto_form = self.get_contacto_form()
 474-        calificacion_form = self.get_form()
@@ -416,11 +416,11 @@
 1226-        if self.es_auditoria:
 1227-            if 'opcion_calificacion' in self.changed_data and opcion.es_agenda():
 1228-                raise forms.ValidationError(
-1229-                    _('Sólo el Agente puede cambiar la calificacion a Agenda.'))
+1229-                    _('Only the Agent can change the disposition to Agenda.'))
 1230-        else:
 1231-            if 'opcion_calificacion' in self.changed_data and opcion.oculta:
 1232-                raise forms.ValidationError(
-1233-                    _('No puede elegir una opción de calificacion oculta.'))
+1233-                    _('You cannot choose a hidden disposition option.'))
 1234-        return opcion
 1235-
 1236-
@@ -466,8 +466,8 @@
 81-                $contactoOtrosDatos.html('');
 82-
 83-                if (data['code'] == 'contacto-asignado'){
-84-                    $errorAsignacionContacto.html(gettext('Contacto asignado por llamado previo.\
-85-Califique el contacto o liberelo para poder recibir un nuevo contacto.'));
+84-                    $errorAsignacionContacto.html(gettext('Contact assigned from a previous call.\
+85-Disposition the contact or release it in order to receive a new contact.'));
 86-                    $('#liberar_contacto').show();
 87-                    $('#calificar_contacto').show();
 88-                    var url_parameters = [campEfectiva, data['contacto_id'], data['agente_id']];
