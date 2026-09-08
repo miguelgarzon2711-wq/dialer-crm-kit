@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-API para la APP MOVIL de los vendedores de el cliente (2026-09-04).
+API for the client's salespeople MOBILE APP (2026-09-04).
 
-Expone lo minimo que necesita la app para levantar un telefono nativo:
-  GET  /api/v1/app/session/          -> datos del agente + credenciales SIP efimeras + config WSS
-  POST /api/v1/app/asterisk_login/   -> deja al agente disponible en sus colas (igual que entrar a la consola)
-  POST /api/v1/app/asterisk_logout/  -> lo saca de las colas
+Exposes the minimum the app needs to bring up a native phone:
+  GET  /api/v1/app/session/          -> agent data + ephemeral SIP credentials + WSS config
+  POST /api/v1/app/asterisk_login/   -> makes the agent available in their queues (same as entering the console)
+  POST /api/v1/app/asterisk_logout/  -> takes them out of the queues
 
-Se usan endpoints propios (no los nativos de OML) porque los nativos exigen el
-sistema de permisos por API de OMniLeads (TienePermisoOML), que no esta habilitado
-para el rol Agente en esta instalacion. Aca la autorizacion es simple: token del
-propio agente (POST /api/v1/login) y el agente solo puede pedir SUS datos.
+Custom endpoints are used (not OML's native ones) because the native ones require
+OMniLeads' API permission system (TienePermisoOML), which is not enabled
+for the Agente role in this installation. Here authorization is simple: the
+agent's own token (POST /api/v1/login) and the agent can only request THEIR OWN data.
 """
 import logging
 
@@ -27,7 +27,7 @@ from ominicontacto_app.services.kamailio_service import KamailioService
 
 logger = logging.getLogger(__name__)
 
-# La consola web muestra las fechas en hora de Miami; la app hace lo mismo.
+# The web console shows dates in Miami time; the app does the same.
 from zoneinfo import ZoneInfo
 _TZ_MIAMI = ZoneInfo('America/New_York')
 
@@ -39,9 +39,9 @@ def _fecha_miami(dt, larga=False):
     except Exception:
         return ''
 
-# Host publico por el que la app llega al Kamailio (mismo camino que el webphone del navegador).
+# Public host the app uses to reach Kamailio (same path as the browser's webphone).
 WS_HOST = 'dialer.example.com'
-# Dominio SIP que espera Kamailio (KAMAILIO_HOSTNAME dentro del server).
+# SIP domain that Kamailio expects (KAMAILIO_HOSTNAME inside the server).
 SIP_DOMAIN = '127.0.0.1'
 REGISTER_EXPIRES = 120
 
@@ -54,7 +54,7 @@ def _agente_de(request):
 
 
 class AppSessionView(APIView):
-    """Todo lo que la app necesita para registrarse por SIP y saber quien es."""
+    """Everything the app needs to register via SIP and know who it is."""
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
     permission_classes = (IsAuthenticated,)
     http_method_names = ['get']
@@ -62,7 +62,7 @@ class AppSessionView(APIView):
     def get(self, request):
         agente = _agente_de(request)
         if agente is None:
-            return Response({'error': 'el usuario no es un agente'}, status=403)
+            return Response({'error': 'the user is not an agent'}, status=403)
 
         kam = KamailioService()
         ttl = getattr(settings, 'EPHEMERAL_USER_TTL', 28800)
@@ -70,15 +70,15 @@ class AppSessionView(APIView):
         sip_user = kam.generar_sip_user(agente.sip_extension, timestamp)
         sip_password = kam.generar_sip_password(sip_user)
         if sip_password is None:
-            return Response({'error': 'no se pudo generar la password SIP'}, status=500)
+            return Response({'error': 'could not generate the SIP password'}, status=500)
 
         campanas = []
         try:
             for c in agente.get_campanas_preview_activas_miembro():
                 campanas.append({'id': c.id, 'nombre': c.nombre, 'tipo': c.type})
         except Exception:
-            # el related_name cambia entre versiones; la app puede vivir sin esto
-            logger.info('APP session: no se pudieron listar campanas de %s', agente.id)
+            # the related_name changes between versions; the app can live without this
+            logger.info('APP session: could not list campanas for %s', agente.id)
 
         user = request.user
         return Response({
@@ -89,8 +89,8 @@ class AppSessionView(APIView):
                 'sip_extension': agente.sip_extension,
             },
             'sip': {
-                # el usuario efimero va TAL CUAL en el URI (sip:<user>@<domain>) y en el
-                # header Authorization: Kamailio saca la extension con $(fu{s.select,2,:})
+                # the ephemeral user goes AS-IS in the URI (sip:<user>@<domain>) and in the
+                # Authorization header: Kamailio extracts the extension with $(fu{s.select,2,:})
                 'user': sip_user,
                 'password': sip_password,
                 'domain': SIP_DOMAIN,
@@ -103,7 +103,7 @@ class AppSessionView(APIView):
 
 
 class AppAsteriskLoginView(APIView):
-    """Marca al agente como logueado/disponible en Asterisk (colas entrantes + boton unificado)."""
+    """Marks the agent as logged in/available in Asterisk (inbound queues + unified button)."""
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
     permission_classes = (IsAuthenticated,)
     http_method_names = ['post']
@@ -111,8 +111,8 @@ class AppAsteriskLoginView(APIView):
     def post(self, request):
         agente = _agente_de(request)
         if agente is None:
-            return Response({'error': 'el usuario no es un agente'}, status=403)
-        # sesión única: entra el celular -> la consola del computador queda fuera
+            return Response({'error': 'the user is not an agent'}, status=403)
+        # single session: the phone logs in -> the computer's console gets kicked out
         _expulsar_consola_web(agente)
         _marcar_dispositivo(agente, 'app')
         try:
@@ -124,12 +124,12 @@ class AppAsteriskLoginView(APIView):
         if error:
             return Response({'status': 'ERROR'}, status=500)
         logger.info('APP asterisk_login OK agente=%s', agente.id)
-        # Sesión única también entre dos celulares (2026-09-06): el token de DRF es uno por
-        # usuario, así que dos aparatos con el mismo login compartían token y ninguno salía.
-        # Se rota: el aparato que entra recibe el token nuevo y el otro queda fuera (401).
+        # Single session also between two phones (2026-09-06): DRF's token is one per
+        # user, so two devices with the same login shared a token and neither got kicked out.
+        # It's rotated: the device that logs in gets the new token and the other is left out (401).
         token_nuevo = None
-        # (solo al arrancar la app: al reengancharse desde segundo plano no se rota, para
-        #  no dejar el celular sin token si se pierde la respuesta en una red mala)
+        # (only when the app starts: reconnecting from the background does not rotate it, so
+        #  as not to leave the phone without a token if the response is lost on a bad network)
         rotar = bool(request.data.get('rotar_token')) if hasattr(request, 'data') else False
         try:
             if not rotar:
@@ -140,7 +140,7 @@ class AppAsteriskLoginView(APIView):
         except StopIteration:
             pass
         except Exception as e:
-            logger.error('APP asterisk_login: no se pudo rotar el token agente=%s: %s', agente.id, e)
+            logger.error('APP asterisk_login: could not rotate the token agente=%s: %s', agente.id, e)
         resp = {'status': 'OK'}
         if token_nuevo:
             resp['token'] = token_nuevo
@@ -155,7 +155,7 @@ class AppAsteriskLogoutView(APIView):
     def post(self, request):
         agente = _agente_de(request)
         if agente is None:
-            return Response({'error': 'el usuario no es un agente'}, status=403)
+            return Response({'error': 'the user is not an agent'}, status=403)
         try:
             from ominicontacto_app.services.asterisk.agent_activity import AgentActivityAmiManager
             AgentActivityAmiManager().logout_agent(agente, manage_connection=True)
@@ -167,8 +167,8 @@ class AppAsteriskLogoutView(APIView):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONSOLA DEL AGENTE (2026-09-04): mismo comportamiento que la consola web.
-# Ver app-movil/COMPORTAMIENTO_DIALER.md — la app NO decide nada, solo pinta.
+# AGENT CONSOLE (2026-09-04): same behavior as the web console.
+# See app-movil/COMPORTAMIENTO_DIALER.md — the app does NOT decide anything, it just renders.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _enmascarar(telefono):
@@ -177,17 +177,17 @@ def _enmascarar(telefono):
 
 
 def _contexto_del_lead(contacto_id, campana_id):
-    """Lo que el vendedor necesita ver de una, sin consultar a GoHighLevel.
-    Sale de la base del propio dialer: ultima disposicion, quien y cuando, y la
-    nota que escribio la IA a partir de la grabacion."""
+    """What the salesperson needs to see about a lead, without querying GoHighLevel.
+    Comes from the dialer's own database: last disposition, who and when, and the
+    note the AI wrote from the recording."""
     ctx = {'ultima_disposicion': None, 'nota_ia': None, 'historial': []}
-    # OJO: en PostgreSQL un error SQL aborta la transaccion COMPLETA de la request
-    # (aunque se capture la excepcion) y se pierde la entrega del lead. Por eso cada
-    # consulta de contexto va en su propio savepoint.
+    # NOTE: in PostgreSQL a SQL error aborts the ENTIRE request transaction
+    # (even if the exception is caught) and the lead delivery is lost. That's why every
+    # context query runs in its own savepoint.
     try:
-        # La tabla de la pagina de calificacion de la web lista el HISTORIAL de la
-        # calificacion vigente (una fila por cada guardado: django-simple-history),
-        # no solo el estado actual. Aca igual.
+        # The web's disposition page table lists the HISTORY of the current
+        # calificacion (one row per save: django-simple-history),
+        # not just the current state. Same here.
         with transaction.atomic(), connection.cursor() as cur:
             cur.execute("""
                 SELECT oc.nombre, h.observaciones, h.history_date,
@@ -217,7 +217,7 @@ def _contexto_del_lead(contacto_id, campana_id):
     except Exception as e:
         logger.error('APP contexto disposiciones error contacto=%s: %s', contacto_id, e)
 
-    # Nota escrita por la IA (Whisper + GPT) de la ultima llamada grabada.
+    # Note written by the AI (Whisper + GPT) from the last recorded call.
     try:
         with transaction.atomic(), connection.cursor() as cur:
             cur.execute("""
@@ -229,16 +229,16 @@ def _contexto_del_lead(contacto_id, campana_id):
             if fila:
                 ctx['nota_ia'] = {'texto': fila[0], 'fecha': _fecha_miami(fila[1])}
     except Exception:
-        # la columna nota_crm se agrega junto con el cambio de transcribe_calls.py
+        # the nota_crm column is added along with the transcribe_calls.py change
         pass
     return ctx
 
 
 class AppLeadView(APIView):
-    """GET /api/v1/app/lead/ -> el lead que le toca al agente (boton unificado).
+    """GET /api/v1/app/lead/ -> the lead the agent is due (unified button).
 
-    Es el mismo `entregar_contacto` de la consola web: respeta prioridades 0-6,
-    el dueño de por vida, "un solo lead a la vez" y el bloqueo anti-colision.
+    It's the same `entregar_contacto` as the web console: it respects priorities 0-6,
+    the lifetime owner, "one lead at a time" and the anti-collision lock.
     """
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
     permission_classes = (IsAuthenticated,)
@@ -247,7 +247,7 @@ class AppLeadView(APIView):
     def get(self, request):
         agente = _agente_de(request)
         if agente is None:
-            return Response({'error': 'el usuario no es un agente'}, status=403)
+            return Response({'error': 'the user is not an agent'}, status=403)
 
         from ominicontacto_app.models import AgenteEnContacto, Campana
         campanas = list(agente.get_campanas_preview_activas_miembro().values_list('id', flat=True))
@@ -260,7 +260,7 @@ class AppLeadView(APIView):
                 id__in=ids, estado=Campana.ESTADO_ACTIVA,
                 type=Campana.TYPE_PREVIEW).values_list('id', flat=True))
         if not campanas:
-            return Response({'hay_lead': False, 'motivo': 'el agente no tiene campañas activas'})
+            return Response({'hay_lead': False, 'motivo': 'the agent has no active campanas'})
 
         data = AgenteEnContacto.entregar_contacto(agente, campanas[0])
         if data.get('result') != 'OK':
@@ -270,7 +270,7 @@ class AppLeadView(APIView):
         contacto_id = data.get('contacto_id')
         campana_id = data.get('campana_id')
         campana = Campana.objects.filter(pk=campana_id).first()
-        _precargar_notas(contacto_id, campana_id)  # notas del CRM listas antes de que la app las pida
+        _precargar_notas(contacto_id, campana_id)  # CRM notes ready before the app requests them
 
         return Response({
             'hay_lead': True,
@@ -289,9 +289,9 @@ class AppLeadView(APIView):
 class AppLlamarView(APIView):
     """POST /api/v1/app/llamar/ {contacto_id, campana_id} -> click2call.
 
-    El numero real NUNCA viaja al telefono: se manda el id del contacto y el
-    servidor arma la llamada. Sirve tambien para la "doble llamada" (volver a
-    marcarle al mismo lead antes de disposicionar).
+    The real number NEVER travels to the phone: the contact's id is sent and the
+    server builds the call. Also used for the "double call" (dialing the
+    same lead again before dispositioning).
     """
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
     permission_classes = (IsAuthenticated,)
@@ -300,58 +300,58 @@ class AppLlamarView(APIView):
     def post(self, request):
         agente = _agente_de(request)
         if agente is None:
-            return Response({'error': 'el usuario no es un agente'}, status=403)
+            return Response({'error': 'the user is not an agent'}, status=403)
         contacto_id = str(request.data.get('contacto_id') or '')
         campana_id = str(request.data.get('campana_id') or '')
         if not contacto_id or not campana_id:
-            return Response({'error': 'contacto_id y campana_id son requeridos'}, status=400)
+            return Response({'error': 'contacto_id and campana_id are required'}, status=400)
 
         from ominicontacto_app.models import AgenteEnContacto, Campana, Contacto
         from ominicontacto_app.services.click2call import Click2CallOriginator
 
         contacto = Contacto.objects.filter(pk=contacto_id).first()
         if contacto is None:
-            return Response({'error': 'no se encontró el contacto'}, status=404)
+            return Response({'error': 'contact not found'}, status=404)
         campana = Campana.objects.obtener_actuales().filter(pk=campana_id).first()
         if campana is None:
-            return Response({'error': 'la campaña no está activa'}, status=400)
+            return Response({'error': 'the campana is not active'}, status=400)
 
-        # Misma regla que la consola web: sin calificar la última llamada no hay otra.
+        # Same rule as the web console: no other call until the last one is dispositioned.
         if _ultima_llamada_sin_calificar(agente):
             return Response({'error': MSG_CALIFICAR_PRIMERO, 'codigo': 'calificar'}, status=409)
-        # ¿Asterisk tiene ruta al teléfono? Si no, la llamada moriría en silencio.
+        # Does Asterisk have a route to the phone? If not, the call would die silently.
         if not _telefono_alcanzable(agente):
-            logger.warning('APP llamar: extension %s sin contacto en Asterisk (agente=%s)', agente.sip_extension, agente.id)
+            logger.warning('APP llamar: extension %s has no contact in Asterisk (agente=%s)', agente.sip_extension, agente.id)
             return Response({'error': MSG_TELEFONO_RECONECTANDO, 'codigo': 'telefono'}, status=409)
 
         if campana.type == Campana.TYPE_PREVIEW:
             if not AgenteEnContacto.asignar_contacto(contacto.id, campana.pk, agente):
-                # DOBLE DIAL DESPUES DE GUARDAR (decisión de producto): al guardar la disposicion
-                # OML finaliza la reserva (AEC=FINALIZADO), pero la web deja volver a marcar al
-                # mismo lead hasta que el agente pide el siguiente. Si la reserva la cerro ESTE
-                # agente, se deja llamar; si el lead volvio a la cola (10 min sin llamar) o es
-                # de otro, no.
+                # DOUBLE DIAL AFTER SAVING (product decision): when the disposition is saved,
+                # OML finalizes the reservation (AEC=FINALIZADO), but the web lets you dial the
+                # same lead again until the agent requests the next one. If THIS agent closed
+                # the reservation, dialing is allowed; if the lead went back to the queue (10 min
+                # without calling) or belongs to someone else, it isn't.
                 finalizado_por_mi = AgenteEnContacto.objects.filter(
                     contacto_id=contacto.id, campana_id=campana.pk, agente_id=agente.id,
                     estado=AgenteEnContacto.ESTADO_FINALIZADO).exists()
                 if not finalizado_por_mi:
-                    return Response({'error': 'Este lead ya no está reservado para vos (volvió a la cola). Pedí uno nuevo.',
+                    return Response({'error': 'This lead is no longer reserved for you (it went back to the queue). Request a new one.',
                                      'codigo': 'perdido'}, status=409)
 
         try:
-            # la central solo marca dígitos (un "+" hace morir la llamada sin aviso)
+            # the switch only dials digits (a "+" kills the call with no warning)
             Click2CallOriginator().call_originate(
                 agente, str(campana.pk), str(campana.type), contacto_id,
                 _solo_digitos(contacto.telefono), 'preview')
         except Exception as e:
             logger.error('APP llamar error agente=%s contacto=%s: %s', agente.id, contacto_id, e)
-            return Response({'error': 'no se pudo iniciar la llamada'}, status=500)
+            return Response({'error': 'could not start the call'}, status=500)
         logger.info('APP llamar agente=%s contacto=%s campana=%s', agente.id, contacto_id, campana.pk)
         return Response({'status': 'OK'})
 
 
 class AppLiberarView(APIView):
-    """POST /api/v1/app/liberar/ {campana_id} -> devuelve el lead a la cola."""
+    """POST /api/v1/app/liberar/ {campana_id} -> returns the lead to the queue."""
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
     permission_classes = (IsAuthenticated,)
     http_method_names = ['post']
@@ -359,7 +359,7 @@ class AppLiberarView(APIView):
     def post(self, request):
         agente = _agente_de(request)
         if agente is None:
-            return Response({'error': 'el usuario no es un agente'}, status=403)
+            return Response({'error': 'the user is not an agent'}, status=403)
         from ominicontacto_app.models import AgenteEnContacto
         campana_id = request.data.get('campana_id')
         liberado, __ = AgenteEnContacto.liberar_contacto(agente.id, campana_id)
@@ -367,7 +367,7 @@ class AppLiberarView(APIView):
 
 
 class AppOpcionesView(APIView):
-    """GET /api/v1/app/opciones/?campana=1 -> disposiciones EN ORDEN ALFABETICO."""
+    """GET /api/v1/app/opciones/?campana=1 -> dispositions IN ALPHABETICAL ORDER."""
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
     permission_classes = (IsAuthenticated,)
     http_method_names = ['get']
@@ -376,7 +376,7 @@ class AppOpcionesView(APIView):
         from ominicontacto_app.models import OpcionCalificacion
         campana_id = request.query_params.get('campana')
         if not campana_id:
-            return Response({'error': 'falta el parámetro campana'}, status=400)
+            return Response({'error': 'missing campana parameter'}, status=400)
         opciones = []
         for o in OpcionCalificacion.objects.filter(campana_id=campana_id).order_by('nombre'):
             subs = []
@@ -391,10 +391,10 @@ class AppOpcionesView(APIView):
 class AppCalificarView(APIView):
     """POST /api/v1/app/calificar/ {contacto_id, opcion_id, subcalificacion, observaciones}
 
-    Crea o actualiza la calificacion igual que la web (solo puede haber UNA por
-    contacto+campaña). Al guardar, el propio modelo finaliza la relacion
-    agente-contacto y las señales sincronizan con GoHighLevel (etiqueta, nota,
-    dueño de por vida y reinyeccion segun corresponda).
+    Creates or updates the calificacion just like the web (there can only be ONE per
+    contacto+campaign). On save, the model itself finalizes the
+    agent-contact relationship and the signals sync with GoHighLevel (tag, note,
+    lifetime owner and re-injection as applicable).
     """
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
     permission_classes = (IsAuthenticated,)
@@ -403,17 +403,17 @@ class AppCalificarView(APIView):
     def post(self, request):
         agente = _agente_de(request)
         if agente is None:
-            return Response({'error': 'el usuario no es un agente'}, status=403)
+            return Response({'error': 'the user is not an agent'}, status=403)
         contacto_id = request.data.get('contacto_id')
         opcion_id = request.data.get('opcion_id')
         if not contacto_id or not opcion_id:
-            return Response({'error': 'contacto_id y opcion_id son requeridos'}, status=400)
+            return Response({'error': 'contacto_id and opcion_id are required'}, status=400)
 
         from ominicontacto_app.models import CalificacionCliente, OpcionCalificacion, Contacto
         opcion = OpcionCalificacion.objects.filter(pk=opcion_id).first()
         contacto = Contacto.objects.filter(pk=contacto_id).first()
         if opcion is None or contacto is None:
-            return Response({'error': 'disposición o contacto inexistente'}, status=404)
+            return Response({'error': 'disposition or contact does not exist'}, status=404)
 
         observaciones = (request.data.get('observaciones') or '').strip()
         subcalificacion = (request.data.get('subcalificacion') or '').strip()
@@ -441,8 +441,8 @@ class AppCalificarView(APIView):
             logger.error('APP calificar error agente=%s contacto=%s: %s', agente.id, contacto_id, e)
             return Response({'error': str(e)}, status=400)
 
-        # Igual que la web al guardar: la llamada queda CALIFICADA (habilita la doble
-        # marcación) y el agente sale de ACW.
+        # Same as the web on save: the call is marked CALIFICADA (enables the double
+        # dial) and the agent leaves ACW.
         try:
             from api_app.services.calificacion_llamada import CalificacionLLamada
             call_data = _armar_call_data(call_id or calificacion.callid or '', opcion.campana, contacto)
@@ -456,7 +456,7 @@ class AppCalificarView(APIView):
             if _estado_agente(agente)['acw']:
                 AgentActivityAmiManager().unpause_agent(agente, '0', manage_connection=True)
         except Exception as e:
-            logger.error('APP salir de ACW agente=%s: %s', agente.id, e)
+            logger.error('APP leave ACW agente=%s: %s', agente.id, e)
 
         logger.info('APP calificar agente=%s contacto=%s opcion=%s callid=%s', agente.id, contacto_id, opcion.nombre, call_id)
         resp = {'status': 'OK', 'calificacion_id': calificacion.id,
@@ -466,16 +466,16 @@ class AppCalificarView(APIView):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FLUJO DE LLAMADA IGUAL A LA CONSOLA WEB (2026-09-05, video de el operador)
-#   colgar  -> ACW (pausa '0') + familia OML:CALIFICACION:LLAMADA con CALIFICADA=FALSE
-#   llamar  -> si la última llamada no está calificada: 409 "No puede hacer una nueva
-#              llamada hasta calificar la última llamada." (mismo aviso que la web)
-#   guardar -> callid en la calificación, CALIFICADA=TRUE, sale de ACW -> doble marcación
+# CALL FLOW SAME AS THE WEB CONSOLE (2026-09-05, video from the operator)
+#   hang up -> ACW (pausa '0') + OML:CALIFICACION:LLAMADA family with CALIFICADA=FALSE
+#   call    -> if the last call is not dispositioned: 409 "You cannot make a new
+#              call until you disposition the last call." (same notice as the web)
+#   save    -> callid on the calificacion, CALIFICADA=TRUE, leaves ACW -> double dial
 # ─────────────────────────────────────────────────────────────────────────────
 import json as _json
 import re as _re
 
-MSG_CALIFICAR_PRIMERO = 'No puede hacer una nueva llamada hasta calificar la última llamada.'
+MSG_CALIFICAR_PRIMERO = 'You cannot make a new call until you disposition the last call.'
 
 
 def _solo_digitos(tel):
@@ -492,7 +492,7 @@ def _familia_calificacion(agente):
 
 
 def _ultima_llamada_sin_calificar(agente):
-    """Misma decisión que ApiStatusCalificacionLlamada (la que usa la consola)."""
+    """Same decision as ApiStatusCalificacionLlamada (the one the console uses)."""
     if not agente.grupo.obligar_calificacion:
         return False
     fam = _familia_calificacion(agente)
@@ -531,10 +531,10 @@ def _estado_agente(agente):
 
 
 def _latido_app(agente):
-    """La app avisa cada 15 s que sigue viva (2026-09-06). Si deja de avisar 3 min
-    (la cerraron o iOS la durmió en segundo plano) sync_agent_pause.py la saca de las
-    colas, como si cerrara el navegador. Devuelve True si eso ya pasó: la app entonces
-    vuelve a entrar en colas sola."""
+    """The app signals every 15 s that it's still alive (2026-09-06). If it stops signaling for 3 min
+    (it was closed or iOS put it to sleep in the background) sync_agent_pause.py takes it out of the
+    queues, as if it closed the browser. Returns True if that already happened: the app then
+    re-enters the queues on its own."""
     try:
         r = _redis_para_agente()
         k = _REDIS_SESION % agente.id
@@ -553,7 +553,7 @@ def _redis_para_agente():
 
 
 class AppEstadoView(APIView):
-    """GET /api/v1/app/estado/ -> lo que muestra la barra superior de la consola."""
+    """GET /api/v1/app/estado/ -> what the console's top bar shows."""
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
     permission_classes = (IsAuthenticated,)
     http_method_names = ['get']
@@ -561,7 +561,7 @@ class AppEstadoView(APIView):
     def get(self, request):
         agente = _agente_de(request)
         if agente is None:
-            return Response({'error': 'el usuario no es un agente'}, status=403)
+            return Response({'error': 'the user is not an agent'}, status=403)
         est = _estado_agente(agente)
         est['dormida'] = _latido_app(agente)
         return Response(est)
@@ -570,9 +570,9 @@ class AppEstadoView(APIView):
 class AppLlamadaTerminadaView(APIView):
     """POST /api/v1/app/llamada_terminada/ {call_id, campana_id, contacto_id}
 
-    Lo que hace la consola cuando cuelga: manda al agente a ACW y deja registrada
-    la llamada como pendiente de calificar (Redis), que es lo que después bloquea
-    una nueva llamada hasta que guarde la disposición.
+    What the console does when it hangs up: sends the agent to ACW and logs the
+    call as pending disposition (Redis), which is what later blocks
+    a new call until the disposition is saved.
     """
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
     permission_classes = (IsAuthenticated,)
@@ -581,7 +581,7 @@ class AppLlamadaTerminadaView(APIView):
     def post(self, request):
         agente = _agente_de(request)
         if agente is None:
-            return Response({'error': 'el usuario no es un agente'}, status=403)
+            return Response({'error': 'the user is not an agent'}, status=403)
         from ominicontacto_app.models import Campana, Contacto
         from ominicontacto_app.services.asterisk.agent_activity import AgentActivityAmiManager
         from api_app.services.calificacion_llamada import CalificacionLLamada
@@ -590,13 +590,13 @@ class AppLlamadaTerminadaView(APIView):
         campana = Campana.objects.filter(pk=request.data.get('campana_id')).first()
         contacto = Contacto.objects.filter(pk=request.data.get('contacto_id')).first()
 
-        # 1) ACW, igual que la consola (pausa '0': NO libera el lead)
+        # 1) ACW, same as the console (pausa '0': does NOT release the lead)
         try:
             AgentActivityAmiManager().pause_agent(agente, '0', manage_connection=True)
         except Exception as e:
             logger.error('APP ACW error agente=%s: %s', agente.id, e)
 
-        # 2) llamada pendiente de calificar (solo si el grupo obliga a calificar)
+        # 2) call pending disposition (only if the group requires dispositioning)
         if call_id and campana and contacto and agente.grupo.obligar_calificacion:
             call_data = _armar_call_data(call_id, campana, contacto, request.data.get('call_type') or '4')
             try:
@@ -611,7 +611,7 @@ class AppLlamadaTerminadaView(APIView):
 
 
 class AppDespausarView(APIView):
-    """POST /api/v1/app/despausar/ -> botón "Reanudar" de la consola (sale de ACW/pausa)."""
+    """POST /api/v1/app/despausar/ -> console's "Reanudar" button (leaves ACW/pause)."""
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
     permission_classes = (IsAuthenticated,)
     http_method_names = ['post']
@@ -619,7 +619,7 @@ class AppDespausarView(APIView):
     def post(self, request):
         agente = _agente_de(request)
         if agente is None:
-            return Response({'error': 'el usuario no es un agente'}, status=403)
+            return Response({'error': 'the user is not an agent'}, status=403)
         from ominicontacto_app.services.asterisk.agent_activity import AgentActivityAmiManager
         try:
             est = _estado_agente(agente)
@@ -632,17 +632,17 @@ class AppDespausarView(APIView):
                 AgentActivityAmiManager().unpause_agent(agente, str(pause_id), manage_connection=True)
         except Exception as e:
             logger.error('APP despausar error agente=%s: %s', agente.id, e)
-            return Response({'error': 'no se pudo reanudar'}, status=500)
+            return Response({'error': 'could not resume'}, status=500)
         return Response(_estado_agente(agente))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SESIÓN ÚNICA computador / celular (decisión de producto): el último que entra gana.
-#   app entra  -> la consola web recibe el MISMO aviso que usa OML cuando el usuario
-#                 abre otra consola ("Se ha detectado un nuevo inicio de sesión…"):
-#                 cuelga el teléfono, queda suspendida y se borra su sesión.
-#   web entra  -> el token del celular deja de servir; la app lo nota en segundos,
-#                 cuelga el teléfono y vuelve al login con un aviso.
+# SINGLE SESSION computer / phone (product decision): whoever logs in last wins.
+#   app logs in  -> the web console gets the SAME notice OML uses when the user
+#                   opens another console ("A new login has been detected…"):
+#                   hangs up the phone, gets suspended and its session is deleted.
+#   web logs in  -> the phone's token stops working; the app notices within seconds,
+#                   hangs up the phone and returns to login with a notice.
 # ─────────────────────────────────────────────────────────────────────────────
 import time as _time
 
@@ -659,7 +659,7 @@ def _expulsar_consola_web(agente):
     except Exception as e:
         logger.error('APP sesion unica: aviso a la consola agente=%s: %s', agente.id, e)
     try:
-        agente.force_logout()  # borra la sesión Django del navegador
+        agente.force_logout()  # deletes the browser's Django session
     except Exception as e:
         logger.error('APP sesion unica: force_logout agente=%s: %s', agente.id, e)
 
@@ -685,8 +685,8 @@ from api_app.views.agente import AgentLoginAsterisk as _AgentLoginAsteriskOML
 
 
 class AgentLoginAsteriskSingleSession(_AgentLoginAsteriskOML):
-    """La consola web llama a este endpoint al cargar. Si la petición viene por
-    sesión de navegador (la app usa token), el celular queda fuera."""
+    """The web console calls this endpoint on load. If the request comes via a
+    browser session (the app uses a token), the phone gets kicked out."""
 
     def post(self, request):
         if getattr(request, 'auth', None) is None:
@@ -695,18 +695,18 @@ class AgentLoginAsteriskSingleSession(_AgentLoginAsteriskOML):
                 if agente is not None:
                     _expulsar_app(agente)
                     _marcar_dispositivo(agente, 'web')
-                    logger.info('APP sesion unica: entró la consola web, celular fuera (agente=%s)', agente.id)
+                    logger.info('APP sesion unica: web console logged in, phone kicked out (agente=%s)', agente.id)
             except Exception as e:
                 logger.error('APP sesion unica (web): %s', e)
         return super().post(request)
 
 
-# ── ¿La central tiene ruta al teléfono del agente? (2026-09-05) ──────────────
-# Kamailio reenvía a Asterisk TODOS los REGISTER, incluido el "me desconecto" del
-# otro dispositivo (mismo contacto compartido sip:<ext>@127.0.0.1:10060). Al cambiar
-# de computador a celular queda una ventana de ~1 min sin ruta hasta el próximo
-# refresco. Antes de marcar se comprueba, y si no hay ruta la app re-registra y reintenta.
-MSG_TELEFONO_RECONECTANDO = 'El teléfono se está reconectando. Intentá de nuevo en unos segundos.'
+# ── Does the switch have a route to the agent's phone? (2026-09-05) ──────────────
+# Kamailio forwards ALL REGISTERs to Asterisk, including the "I'm disconnecting" from the
+# other device (same shared contact sip:<ext>@127.0.0.1:10060). When switching
+# from computer to phone there's a ~1 min window with no route until the next
+# refresh. It's checked before dialing, and if there's no route the app re-registers and retries.
+MSG_TELEFONO_RECONECTANDO = 'The phone is reconnecting. Try again in a few seconds.'
 
 
 def _telefono_alcanzable(agente):
@@ -714,7 +714,7 @@ def _telefono_alcanzable(agente):
         from ominicontacto_app.services.asterisk.asterisk_ami import AmiManagerClient
         m = AmiManagerClient()
         if m.connect():
-            return True  # sin AMI no bloqueamos
+            return True  # without AMI we don't block
         try:
             data, err = m._ami_manager('command', 'pjsip show aor %s' % agente.sip_extension)
         finally:
@@ -728,17 +728,17 @@ def _telefono_alcanzable(agente):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NOTAS DEL CRM (decisión de producto): "todas las notas de lo más reciente que pasó",
-# tal cual están en GoHighLevel (las escribe el dialer: disposiciones y Whisper, o
-# cualquiera en el CRM). Se piden aparte de la tarjeta para no frenarla, con caché
-# de 60 s en Redis. Si GHL no responde o el lead es demo, se usan las del dialer.
+# CRM NOTES (product decision): "all the notes on the most recent thing that happened",
+# exactly as they are in GoHighLevel (written by the dialer: dispositions and Whisper, or
+# anyone in the CRM). Requested separately from the card so it isn't slowed down, with a
+# 60 s Redis cache. If GHL doesn't respond or the lead is a demo, the dialer's are used.
 # ─────────────────────────────────────────────────────────────────────────────
 NOTAS_CACHE_SEG = 60
 NOTAS_MAX = 10
 
 
 def _notas_ghl(ghl_id):
-    """Notas del contacto en GHL, de la más nueva a la más vieja. None si no se pudo consultar."""
+    """Contact's notes in GHL, from newest to oldest. None if it couldn't be queried."""
     import requests as _rq
     from datetime import datetime as _dt
     from api_app.views import crm_dispositions as _d
@@ -789,7 +789,7 @@ class AppNotasView(APIView):
     def get(self, request):
         agente = _agente_de(request)
         if agente is None:
-            return Response({'error': 'el usuario no es un agente'}, status=403)
+            return Response({'error': 'the user is not an agent'}, status=403)
         from ominicontacto_app.models import Contacto
         try:
             contacto_id = int(request.query_params.get('contacto_id') or 0)
@@ -812,9 +812,9 @@ class AppNotasView(APIView):
         ghl_id = (contacto.id_externo or '').strip()
         notas = _notas_ghl(ghl_id)
         fuente = 'crm'
-        if notas is None:          # GHL no disponible o lead demo
+        if notas is None:          # GHL unavailable or demo lead
             notas, fuente = _notas_dialer(contacto_id, campana_id), 'dialer'
-        elif not notas:            # el CRM no tiene nada: lo que sepa el dialer
+        elif not notas:            # the CRM has nothing: whatever the dialer knows
             notas, fuente = _notas_dialer(contacto_id, campana_id), 'dialer'
         resp = {'notas': notas, 'fuente': fuente}
         try:
@@ -826,8 +826,8 @@ class AppNotasView(APIView):
 
 
 def _precargar_notas(contacto_id, campana_id):
-    """Al entregar el lead, las notas del CRM se traen en segundo plano y quedan en Redis:
-    cuando la app las pide un instante después, salen de memoria (instantáneas)."""
+    """When the lead is delivered, the CRM notes are fetched in the background and stored in Redis:
+    when the app requests them an instant later, they come from memory (instant)."""
     import threading
 
     def _tarea():

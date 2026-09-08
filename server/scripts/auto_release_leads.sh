@@ -1,11 +1,11 @@
 #!/bin/bash
-# Auto-release el cliente: contactos ENTREGADOS sin llamar en >10 min -> vuelven al pool (INICIAL)
-# 2026-09-06 (el operador): si el lead NO tiene dueño vuelve con prioridad 1 (como llamada perdida)
-# para que el siguiente vendedor libre lo llame ya; si tiene dueño vuelve al dueño con su prioridad.
-# 2026-09-06 noche (el operador): al devolverlo, si NO tiene dueño se DESASIGNA también en GHL
-# (al obtenerlo se le había asignado al vendedor para que pudiera entrar al CRM; si nunca
-# lo llamó, no puede quedarse con el lead en LeadConnector). Con dueño no se toca.
-# Campañas Preview 1-5. Pedido decisión de producto.
+# Auto-release: contacts in ENTREGADO with no call for >10 min -> back to the pool (INICIAL)
+# If the lead has NO owner it returns with priority 1 (same level as a missed call)
+# so the next free rep calls it right away; if it has an owner it returns to the owner with its own priority.
+# On release, a lead with NO owner is also UNASSIGNED in the CRM
+# (it was assigned to the rep when they took it so they could open it in the CRM; if they never
+# called it, they cannot keep the lead in the CRM). Leads with an owner are left untouched.
+# Preview campaigns 1-5.
 CONTAINER=prod-env-postgresql-1
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
@@ -29,7 +29,7 @@ if [ -n "$CANDIDATOS" ]; then
   done <<< "$CANDIDATOS"
   LIBRES="${LIBRES#,}"
   if [ -n "$LIBRES" ]; then
-    # desasignar en GHL (owner=null) los que no tienen dueño de por vida
+    # unassign in the CRM (owner=null) those without lifetime ownership
     docker exec prod-env-django-app-1 python3 /opt/omnileads/ominicontacto/manage.py shell -c "
 import requests, logging
 from api_app.views import crm_dispositions as d

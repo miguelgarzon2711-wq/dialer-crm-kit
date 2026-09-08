@@ -1,117 +1,127 @@
 # Dialer + CRM Kit
 
-Integración lista para producción entre un **dialer OMniLeads** y un **CRM**
-(probado con GoHighLevel): los leads entran solos, se marcan por prioridad, y el
-resultado de cada llamada vuelve al CRM sin que nadie copie y pegue nada.
+Production-tested integration between an **OMniLeads dialer** and a **CRM** (tested
+with GoHighLevel): leads come in on their own, get dialed by priority, and the result
+of every call goes back to the CRM without anyone copying and pasting.
 
-Salió de un sistema real en operación con ~20 vendedores y ~80 leads nuevos por día.
-Todo lo que hay acá corrió en producción; los errores que costaron caro están
-documentados para que no los repitas.
+It came out of a live system running roughly 20 reps and 80 new leads a day.
+Everything here ran in production, and the mistakes that cost the most are documented
+so you do not repeat them.
 
 ---
 
-## Qué resuelve
+## What it solves
 
-Un equipo de ventas que llama leads suele tener los mismos cinco problemas. Este kit
-los ataca de raíz:
+Sales teams that call leads tend to hit the same five problems. This kit attacks the
+root cause of each:
 
-| Problema | Qué hace el kit |
+| Problem | What the kit does |
 |---|---|
-| Los leads llegan al CRM y nadie los llama a tiempo | webhook los inyecta en la cola en segundos, ordenados por probabilidad de contestar |
-| Dos vendedores llaman al mismo cliente y se pelean la comisión | el primero que conversa queda dueño del lead de por vida |
-| Los números salen marcados como "Spam Likely" y nadie contesta | rotación de caller ID con tope diario por número y calentamiento gradual |
-| Nadie sabe qué se habló en las llamadas | transcripción con IA, nota automática en el CRM y alerta si el vendedor dispuso un buzón como si fuera una persona |
-| Se reinicia el servidor y hay que reconfigurar medio sistema | los parches se reaplican solos al arranque |
+| Leads land in the CRM and nobody calls them in time | a webhook pushes them into the queue within seconds, ordered by likelihood of answering |
+| Two reps call the same customer and fight over the commission | the first one to have a real conversation owns that lead for life |
+| Outbound numbers get flagged "Spam Likely" and nobody answers | caller ID rotation with a daily cap per number and gradual warm-up |
+| Nobody knows what was said on the calls | AI transcription, automatic CRM notes, and an alert when a rep dispositions a voicemail as if it were a person |
+| The server reboots and half the system needs reconfiguring | patches reapply themselves at boot |
 
 ---
 
-## Qué necesitás antes de empezar
+## What you need before starting
 
-- Un servidor propio con **OMniLeads** instalado (Docker). Referencia: 4 vCPU / 8 GB
-  para unos 20 agentes simultáneos.
-- Una cuenta en un **proveedor SIP** (el kit está probado con Telnyx) y números
-  del área que vas a llamar.
-- Una cuenta de **CRM** con acceso a su API. El kit trae la integración de
-  GoHighLevel hecha; para otro CRM se reescribe una sola capa.
-- Opcional: una clave de **OpenAI** si querés transcripción y notas automáticas.
-- Alguien con acceso `root` al servidor.
-
----
-
-## Cómo se instala
-
-**Si estás usando un agente de IA (Claude Code o similar), decile que lea
-[`CLAUDE.md`](CLAUDE.md) primero.** Ese archivo está escrito para él: trae el orden
-correcto de instalación, las reglas que no se pueden romper y los errores conocidos.
-
-Resumen del recorrido:
-
-1. OMniLeads funcionando y probado.
-2. **Cerrar el servidor** (firewall). Esto va temprano, no al final.
-3. Telefonía: trunk, números, y una llamada real que suene.
-4. Base de datos: `server/sql/schema.sql`.
-5. Credenciales: copiar `.env.example` y completarlo.
-6. Integración con el CRM.
-7. Automatizaciones (cron).
-8. Persistencia de parches y prueba de reinicio.
-
-El detalle de cada paso está en [`docs/02-INSTALACION.md`](docs/02-INSTALACION.md).
+- Your own server with **OMniLeads** installed (Docker). Reference: 4 vCPU / 8 GB for
+  about 20 concurrent agents.
+- An account with a **SIP provider** (tested with Telnyx) and numbers in the area you
+  will be calling.
+- A **CRM** account with API access. GoHighLevel integration is included; for another
+  CRM you rewrite a single layer.
+- Optional: an **OpenAI** key if you want transcription and automatic notes.
+- Someone with `root` access to the server.
 
 ---
 
-## Documentación
+## How to install it
 
-| Documento | De qué trata |
+**If you are using an AI agent (Claude Code or similar), point it at
+[`CLAUDE.md`](CLAUDE.md) first.** That file is written for the agent: correct
+installation order, rules that cannot be broken, and known failure modes.
+
+The route, in short:
+
+1. OMniLeads installed and verified.
+2. **Lock down the server** (firewall). This comes early, not last.
+3. Telephony: trunk, numbers, and a real call that rings.
+4. Database: `server/sql/schema.sql`.
+5. Credentials: copy `.env.example` and fill it in.
+6. CRM integration.
+7. Automation (cron).
+8. Patch persistence and a reboot test.
+
+Full detail in [`docs/02-INSTALLATION.md`](docs/02-INSTALLATION.md).
+
+---
+
+## Documentation
+
+| Document | What it covers |
 |---|---|
-| [`CLAUDE.md`](CLAUDE.md) | **Empezá acá.** Instrucciones para el agente que instala, reglas duras y errores conocidos |
-| [`docs/01-ARQUITECTURA.md`](docs/01-ARQUITECTURA.md) | Cómo encajan las piezas y por dónde viaja una llamada |
-| [`docs/02-INSTALACION.md`](docs/02-INSTALACION.md) | Paso a paso desde un servidor vacío |
-| [`docs/03-INTEGRACION-CRM.md`](docs/03-INTEGRACION-CRM.md) | Webhooks, campos, prioridades y ciclo de asignación |
-| [`docs/04-COMPORTAMIENTO.md`](docs/04-COMPORTAMIENTO.md) | Las reglas de negocio: qué hace el dialer y por qué |
-| [`docs/05-TELEFONIA.md`](docs/05-TELEFONIA.md) | Trunk, rotación de números, entrantes y seguridad SIP |
-| [`docs/06-TRANSCRIPCION-IA.md`](docs/06-TRANSCRIPCION-IA.md) | Notas automáticas y auditoría de buzones |
-| [`docs/07-OPERACION.md`](docs/07-OPERACION.md) | Cron, persistencia, vigilancia y diagnóstico |
-| [`docs/08-LECCIONES.md`](docs/08-LECCIONES.md) | Lo que costó caro aprender |
-| [`docs/09-PROBLEMAS-CONOCIDOS.md`](docs/09-PROBLEMAS-CONOCIDOS.md) | Lo que sabemos que está imperfecto, y cómo resolverlo |
+| [`CLAUDE.md`](CLAUDE.md) | **Start here.** Instructions for the installing agent, hard rules, known failure modes |
+| [`docs/01-ARCHITECTURE.md`](docs/01-ARCHITECTURE.md) | How the pieces fit and the path a call takes |
+| [`docs/02-INSTALLATION.md`](docs/02-INSTALLATION.md) | Step by step from an empty server |
+| [`docs/03-CRM-INTEGRATION.md`](docs/03-CRM-INTEGRATION.md) | Webhooks, payloads, priorities and the ownership cycle |
+| [`docs/04-BEHAVIOR.md`](docs/04-BEHAVIOR.md) | The business rules: what the dialer does and why |
+| [`docs/05-TELEPHONY.md`](docs/05-TELEPHONY.md) | Trunk, number rotation, inbound routing and SIP security |
+| [`docs/06-AI-TRANSCRIPTION.md`](docs/06-AI-TRANSCRIPTION.md) | Automatic notes and voicemail auditing |
+| [`docs/07-OPERATIONS.md`](docs/07-OPERATIONS.md) | Cron, persistence, watchdogs and troubleshooting |
+| [`docs/08-LESSONS.md`](docs/08-LESSONS.md) | What was expensive to learn |
+| [`docs/09-KNOWN-ISSUES.md`](docs/09-KNOWN-ISSUES.md) | What we know is imperfect, and how to deal with it |
 
 ---
 
-## Qué hay en cada carpeta
+## Repository layout
 
 ```
 server/
-  django/     módulos que se copian al contenedor de Django
-              crm_webhooks.py       recibe leads del CRM
-              crm_dispositions.py   devuelve resultados al CRM
-              lead_ownership.py     dueño permanente del lead
-              agent_api.py          API REST para clientes móviles
-  asterisk/   dialplan y colas
-  scripts/    tareas programadas y mantenimiento
-  sql/        tablas propias del kit
-  patches/    cambios a aplicar sobre archivos de OMniLeads
-tools/        verificador de credenciales antes de publicar
-docs/         documentación
+  django/     modules copied into the Django container
+              crm_webhooks.py       receives leads from the CRM
+              crm_dispositions.py   sends results back to the CRM
+              lead_ownership.py     permanent lead ownership
+              agent_api.py          REST API for mobile clients
+  asterisk/   dialplan and queues
+  scripts/    scheduled jobs and maintenance
+  sql/        the kit's own tables
+  patches/    changes to apply on top of OMniLeads files
+tools/        credential scanner, run before publishing
+docs/         documentation
 ```
 
 ---
 
-## Seguridad
+## A note on language
 
-Este repositorio **no contiene ninguna credencial**. Todo secreto vive en
-`/root/.env_dialer` (permisos 600) fuera del control de versiones.
+Documentation and code comments are in English. **Identifiers are not**: table names,
+columns, variables and API fields are in Spanish (`contacto_id`, `agente_id`,
+`campana_id`, `telefono`) because OMniLeads defines them that way. Renaming them
+breaks the system. The same applies to disposition and lead-type values, which are
+compared against the database and the CRM as literal strings.
 
-Antes de subir cualquier cambio, corré:
+---
+
+## Security
+
+This repository contains **no credentials**. Every secret lives in `/root/.env_dialer`
+(mode 600), outside version control.
+
+Before pushing any change, run:
 
 ```bash
 bash tools/check_secrets.sh
 ```
 
-Busca claves, tokens, IPs, teléfonos y dominios reales que se te hayan escapado.
-Si encuentra algo, no subas nada hasta limpiarlo.
+It scans for keys, tokens, IP addresses, phone numbers and real domains that slipped
+through. If it finds anything, do not push until it is cleaned up.
 
 ---
 
-## Licencia y uso
+## License and use
 
-Uso privado bajo autorización del autor. OMniLeads y Asterisk tienen sus propias
-licencias: este kit no las incluye ni las redistribuye, solo se apoya en ellas.
+Private use under the author's authorization. OMniLeads and Asterisk carry their own
+licenses: this kit neither includes nor redistributes them, it only builds on top.

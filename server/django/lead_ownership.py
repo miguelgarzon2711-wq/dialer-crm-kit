@@ -1,27 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-STICKY DE POR VIDA — Dialer (regla decisión de producto).
+LIFETIME STICKY — Dialer (product decision rule).
 
-El PRIMER agente con el que el lead CONVERSÓ (disposición de contacto real) queda
-dueño del lead para siempre: toda inyección posterior (Seguimiento, Nuevo Lead,
-WA Respondió, Callback, WA Cita Pendiente), en CUALQUIER campaña, se entrega solo
-a él, aunque después vuelva a no contestar. El owner de GHL tampoco se quita.
+The FIRST agent the lead TALKED with (a real contact disposition) becomes the
+owner of the lead forever: every subsequent injection (Seguimiento, Nuevo Lead,
+WA Respondió, Callback, WA Cita Pendiente), in ANY campaign, is delivered only
+to them, even if they later fail to answer again. The GHL owner isn't removed either.
 
-NO se pierde ni si el agente se inactiva ni si se borra del dialer (decisión el operador). Tabla: dialer_lead_owner(contacto_id PK, agente_id, since, motivo).
+It is NOT lost even if the agent is deactivated or deleted from the dialer (operator's decision). Table: dialer_lead_owner(contacto_id PK, agente_id, since, motivo).
 """
 import logging
 from django.db import connection
 
 logger = logging.getLogger(__name__)
 
-# Disposiciones que prueban que hubo conversación con el lead
+# Dispositions that prove there was a conversation with the lead
 DISPOS_CONVERSACION = {
     "Agendo cita", "Va a agendar", "Llamada de vuelta programada", "Prefiere WhatsApp",
     "Solo queria precio", "Colgo", "Error mio de ventas", "No interesado", "Ya compro",
 }
 
-# DUEÑO PERMANENTE (decisión de producto): el dueño NO se pierde ni si el vendedor se inactiva
-# ni si se borra del dialer. Sus leads quedan en cola a su nombre.
+# PERMANENT OWNER (product decision): the owner is NOT lost even if the salesperson is deactivated
+# or deleted from the dialer. Their leads stay queued under their name.
 _SQL_OWNER_ACTIVO = (
     "SELECT o.agente_id FROM dialer_lead_owner o WHERE o.contacto_id = %s"
 )
@@ -47,7 +47,7 @@ def ensure_table():
 
 
 def set_owner(contacto_id, agente_id, motivo=""):
-    """Fija el dueño si aún no tiene (el primero gana, para siempre)."""
+    """Sets the owner if it doesn't have one yet (first one wins, forever)."""
     if not contacto_id or not agente_id or int(agente_id) <= 0:
         return False
     try:
@@ -58,8 +58,8 @@ def set_owner(contacto_id, agente_id, motivo=""):
                 [int(contacto_id), int(agente_id), motivo])
             inserted = cur.rowcount == 1
         if inserted:
-            logger.info("sticky: contacto=%s dueño=%s (%s)", contacto_id, agente_id, motivo)
-        # inmediato: lo que este en cola (pool) de este lead pasa al dueño YA (sin esperar el cron)
+            logger.info("sticky: contacto=%s owner=%s (%s)", contacto_id, agente_id, motivo)
+        # immediate: whatever is in this lead's pool queue moves to the owner RIGHT NOW (without waiting for the cron)
         sync_contacto(contacto_id)
         return inserted
     except Exception as e:
@@ -68,7 +68,7 @@ def set_owner(contacto_id, agente_id, motivo=""):
 
 
 def sync_contacto(contacto_id):
-    """Los AEC en pool (INICIAL, agente -1) de ESTE lead pasan al dueño activo, en todas las campañas."""
+    """AEC rows in the pool (INICIAL, agente -1) for THIS lead move to the active owner, across all campaigns."""
     try:
         with connection.cursor() as cur:
             cur.execute(_SQL_SYNC_POOL + " AND aec.contacto_id = %s", [int(contacto_id)])
@@ -79,7 +79,7 @@ def sync_contacto(contacto_id):
 
 
 def get_owner(contacto_id):
-    """agente_id dueño del lead (permanente), o -1."""
+    """agente_id of the lead's (permanent) owner, or -1."""
     try:
         with connection.cursor() as cur:
             cur.execute(_SQL_OWNER_ACTIVO, [int(contacto_id)])
@@ -91,8 +91,8 @@ def get_owner(contacto_id):
 
 
 def sync_pool():
-    """Seguro: cualquier AEC en pool (INICIAL, agente -1) de un lead con dueño
-    activo vuelve al dueño. Cubre liberaciones de OML que no pasan por señales."""
+    """Safety net: any AEC in the pool (INICIAL, agente -1) of a lead with an active
+    owner goes back to the owner. Covers OML releases that don't go through signals."""
     try:
         with connection.cursor() as cur:
             cur.execute(_SQL_SYNC_POOL)
@@ -103,7 +103,7 @@ def sync_pool():
 
 
 def agente_inactivo(agente_id):
-    """True si el agente esta inactivo/borrado (o no existe). -1 no cuenta como inactivo."""
+    """True if the agent is inactive/deleted (or doesn't exist). -1 doesn't count as inactive."""
     try:
         if agente_id is None or int(agente_id) <= 0:
             return False
@@ -125,7 +125,7 @@ _SQL_LIBERAR_INACTIVOS = (
 
 
 def liberar_de_inactivos():
-    """Leads en pool asignados a un agente inactivo/borrado vuelven al pool general."""
+    """Pool leads assigned to an inactive/deleted agent go back to the general pool."""
     try:
         with connection.cursor() as cur:
             cur.execute(_SQL_LIBERAR_INACTIVOS)

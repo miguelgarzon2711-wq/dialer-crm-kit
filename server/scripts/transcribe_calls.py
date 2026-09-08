@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Whisper Dialer (El Negocio): Transcripcion + resumen CRM -> nota GHL
+Whisper Dialer (The Business): Transcription + CRM summary -> GHL note
 /root/transcribe_calls.py
 Cron: * 12-02 * * 1-6 /root/run_transcribe.sh >> /var/log/transcripciones.log 2>&1
-Clon del de otro cliente adaptado a otro cliente (coaching de bienestar/peso/nutrición, mercado latino USA).
+Clone of another client's, adapted to another client (wellness/weight/nutrition coaching, USA Latino market).
 
-Rastreo por callid (no por disposición). Cache de transcripciones por callid.
-Cada audio se transcribe UNA sola vez en su vida.
+Tracked by callid (not by disposition). Transcript cache keyed by callid.
+Each audio file is transcribed only ONCE in its lifetime.
 """
 
 import re
@@ -18,7 +18,7 @@ from botocore.client import Config
 from botocore.exceptions import ClientError
 from datetime import datetime, timedelta, timezone
 
-# ─── Credenciales ────────────────────────────────────────────────────────────
+# ─── Credentials ────────────────────────────────────────────────────────────
 for line in open('/root/.env_dialer'):
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -31,27 +31,27 @@ GHL_READ_TOKEN = os.environ.get('GHL_READ_TOKEN', '')
 GHL_LOCATION   = os.environ.get('GHL_LOCATION_ID', 'CRM_LOCATION_ID')
 
 if not OPENAI_API_KEY:
-    print("OPENAI_API_KEY no configurada — abortando")
+    print("OPENAI_API_KEY not configured — aborting")
     sys.exit(0)
 
 # ─── Config ──────────────────────────────────────────────────────────────────
-CAMPAIGN_OUTBOUND = 1     # (no usado: query cubre 1-5)
-CAMPAIGN_INBOUND  = -1    # inbound aun no montado en el cliente
+CAMPAIGN_OUTBOUND = 1     # (not used: query covers 1-5)
+CAMPAIGN_INBOUND  = -1    # inbound not yet set up for the client
 MIN_DURATION_SECS = 30
 STATE_FILE        = '/var/log/transcripciones_procesadas.json'
 CACHE_FILE        = '/var/log/transcripts_cache.json'
-# Credenciales por entorno. Los valores por defecto son los que trae OMniLeads
-# de fábrica: si tu instalación los cambió (deberías), poné los tuyos en
-# /root/.env_dialer en vez de escribirlos acá.
+# Credentials from the environment. The defaults are OMniLeads factory values:
+# if your installation changed them (it should), put yours in /root/.env_dialer
+# instead of writing them here.
 DB = dict(host=os.environ.get('DB_HOST', '127.0.0.1'),
           port=int(os.environ.get('DB_PORT', 5432)),
           dbname=os.environ.get('DB_NAME', 'omnileads'),
           user=os.environ.get('DB_USER', 'omnileads'),
           password=os.environ.get('DB_PASSWORD', 'CAMBIAR_CLAVE_POSTGRES'))
-# Zona horaria con la que se arman las fechas y las carpetas de grabaciones.
-# OJO: tiene que coincidir con la del servidor donde corre Asterisk, no con la
-# del operador ni con la del cliente. Si no coincide, el script busca las
-# grabaciones en la carpeta del dia equivocado y no encuentra nada.
+# Time zone used to build dates and recording folder paths.
+# CAREFUL: it must match the server running Asterisk, not the operator's zone
+# and not the client's. If it does not match, this script looks for recordings
+# in the wrong day's folder and finds nothing.
 from zoneinfo import ZoneInfo
 TZ = ZoneInfo(os.environ.get('DIALER_TZ', 'America/New_York'))
 
@@ -63,31 +63,31 @@ def format_fecha(dt):
     bog = dt.astimezone(TZ)
     return f"{DIAS[bog.weekday()]} {bog.day} de {MESES[bog.month - 1]}"
 
-# Disposiciones sin conversación real: no vale la pena gastar transcripción.
-# Ajustá esta lista a las disposiciones de tu cliente.
+# Dispositions with no real conversation: not worth spending transcription on.
+# Adjust this list to your client's dispositions.
 SKIP_DISPOSITIONS = {'No contesto', 'Numero equivocado'}
 
 # ============================================================================
-#  PROMPTS — ESTO ES LO PRIMERO QUE TENÉS QUE ADAPTAR A TU CLIENTE
+#  PROMPTS — THIS IS THE FIRST THING YOU NEED TO ADAPT FOR YOUR CLIENT
 #
-#  De estos dos textos depende la calidad de todas las notas. Un prompt genérico
-#  produce notas genéricas e inútiles ("el cliente mostró interés"); un prompt
-#  que nombra los datos concretos del negocio produce notas que el vendedor
-#  realmente lee antes de volver a llamar.
+#  The quality of every note depends on these two texts. A generic prompt
+#  produces generic, useless notes ("the customer showed interest"); a prompt
+#  that names the concrete data points of the business produces notes the rep
+#  actually reads before calling back.
 #
-#  Cómo escribirlo bien:
-#   1. Decí qué vende el negocio y a quién, en una línea.
-#   2. Listá los 5 o 6 datos que el vendedor NECESITA de una llamada.
-#      Preguntáselo al cliente: "¿qué querés saber sí o sí de cada llamada?"
-#      Sean cuales sean, ponelos como reglas que la IA nunca puede omitir.
-#   3. Fijá el idioma, el tono y el largo máximo.
-#   4. Definí qué pasa cuando la persona no dijo casi nada (una sola frase),
-#      para que no invente relleno.
+#  How to write it well:
+#   1. State what the business sells and to whom, in one line.
+#   2. List the 5 or 6 data points the rep NEEDS out of a call.
+#      Ask the client: "what do you need to know from every single call?"
+#      Whatever they are, write them as rules the AI can never skip.
+#   3. Fix the language, the tone and the maximum length.
+#   4. Define what happens when the person said almost nothing (a single
+#      sentence), so the model does not invent filler.
 #
-#  Probalo con 10 llamadas reales antes de dejarlo corriendo.
+#  Test it against 10 real calls before leaving it running.
 # ============================================================================
 
-_NEGOCIO = "<QUÉ VENDE EL NEGOCIO Y A QUIÉN>"          # ej: "muebles a medida para casas"
+_NEGOCIO = "<QUÉ VENDE EL NEGOCIO Y A QUIÉN>"          # e.g.: "custom furniture for homes"
 _DATOS_CLAVE = """\
   - <DATO 1 que el vendedor necesita>
   - <DATO 2>
@@ -181,10 +181,10 @@ def download_recording(s3, callid, archivo, rec_time, is_inbound=False):
 # ─── Estado + Cache ──────────────────────────────────────────────────────────
 def load_state():
     """
-    Devuelve dict:
-      processed_callids: set de callids ya procesados (con nota publicada)
-      legacy_keys:        set de keys del formato viejo 'disp_id_modified'
-                          (para evitar tormenta de re-procesamiento al migrar)
+    Returns dict:
+      processed_callids: set of callids already processed (with a note published)
+      legacy_keys:        set of keys in the old 'disp_id_modified' format
+                          (to avoid a re-processing storm when migrating)
     """
     try:
         raw = json.load(open(STATE_FILE))
@@ -192,7 +192,7 @@ def load_state():
         return {'processed_callids': set(), 'legacy_keys': set()}
 
     if isinstance(raw, list):
-        # Formato VIEJO: lista de "disp_id_modified"
+        # OLD format: list of "disp_id_modified"
         return {'processed_callids': set(), 'legacy_keys': set(str(x) for x in raw)}
 
     return {
@@ -201,7 +201,7 @@ def load_state():
     }
 
 def save_state(state):
-    # Limpieza: legacy_keys más viejos que 7 días ya no aplican (cutoff SQL = 48h)
+    # Cleanup: legacy_keys older than 7 days no longer apply (SQL cutoff = 48h)
     cutoff_iso = (datetime.now(tz=timezone.utc) - timedelta(days=7)).isoformat()
     legacy_clean = {k for k in state['legacy_keys']
                     if '_' in k and k.split('_', 1)[1] > cutoff_iso}
@@ -219,7 +219,7 @@ def load_cache():
 def save_cache(cache):
     json.dump(cache, open(CACHE_FILE, 'w'), ensure_ascii=False)
 
-# ─── GHL lookup por teléfono ─────────────────────────────────────────────────
+# ─── GHL lookup by phone ─────────────────────────────────────────────────────
 def lookup_ghl_by_phone(phone):
     if not GHL_READ_TOKEN:
         return None
@@ -291,7 +291,7 @@ def transcribe_audio(audio_data, filename):
         files={'file': (filename, io.BytesIO(audio_data), 'audio/mpeg')},
         data={
             'model': 'whisper-1',
-            # sin 'language': Whisper detecta el idioma (los buzones pueden estar en ingles o espanol)
+            # no 'language': Whisper detects it (voicemail greetings may be in any language)
             'response_format': 'verbose_json',
             'prompt': 'Llamada de ventas de un concesionario de carros el negocio en Miami a clientes latinos. Financiamiento, aprobacion, down payment, trade-in, cita en el dealer. Sales call from a el negocio dealership in Miami; voicemail greetings may be in English: "leave a message after the tone".'
         },
@@ -307,19 +307,19 @@ def transcribe_audio(audio_data, filename):
 
 LAST_LANGUAGE = {'lang': ''}
 
-# ─── AUDITORIA BUZON (decisión de producto) ─────────────────────────────────────
-# Detecta si la "conversacion" fue en realidad un buzon de voz (espanol o ingles) y lo guarda en
-# dialer_call_audit para el reporte (/root/call_report.py). Cero costo extra: usa la
-# transcripcion que ya se hace. Si el vendedor puso una disposicion de conversacion sobre un
-# buzon, queda una ALERTA en /var/log/voicemail_alerts.log.
+# ─── VOICEMAIL AUDIT (product decision) ─────────────────────────────────────
+# Detects whether the "conversation" was actually a voicemail and records it in
+# dialer_call_audit for the report (/root/call_report.py). Zero extra cost: it reuses
+# the transcription that already happened. If the rep filed a conversation disposition
+# on a voicemail, an ALERT is written to /var/log/voicemail_alerts.log.
 BUZON_PATTERNS = [
-    # espanol
+    # Spanish
     r'deje? (su|un|tu) mensaje', r'despu[eé]s del tono', r'despu[eé]s de la se[nñ]al', r'buz[oó]n de voz',
     r'no (est[aá]|se encuentra) disponible', r'la persona (a la )?que (usted )?(llama|marc[oó])',
     r'el n[uú]mero (que usted )?marc[oó]', r'grabe? (su|tu) mensaje', r'correo de voz', r'contestador',
     r'ha sido (transferid[oa]|redirigid[oa]) (a|al) (un )?(sistema|buz[oó]n|correo)', r'intente (m[aá]s tarde|de nuevo)',
     r'cuelgue', r'presione (la tecla )?(uno|1|numeral|gato)',
-    # ingles
+    # English
     r'leave (a|your) message', r'after the (tone|beep)', r'at the tone', r'voice ?mail', r'mailbox',
     r'(is|are) not available', r'the person you (are|\'re) (trying to reach|calling)', r'has a voice',
     r'google voice', r'please record your message', r'when you(\'re| are) finished', r'hang up',
@@ -330,10 +330,10 @@ BUZON_RE = re.compile('|'.join(BUZON_PATTERNS), re.IGNORECASE)
 
 
 def es_buzon(text):
-    """True si la transcripcion parece un buzon de voz (ES/EN)."""
+    """True if the transcript looks like a voicemail greeting."""
     if not text:
         return False
-    head = text[:600]          # el saludo del buzon esta al inicio
+    head = text[:600]          # the voicemail greeting is at the start
     hits = BUZON_RE.findall(head)
     return len(hits) >= 1
 
@@ -359,15 +359,15 @@ def registrar_audit(conn, callid, contacto_id, agente, disposition, campana_id, 
     conn.commit(); cur.close()
     if alerta:
         with open('/var/log/voicemail_alerts.log', 'a') as f:
-            f.write("%s ALERTA BUZON: %s puso '%s' (contacto %s, campana %s, callid %s, %ss) sobre un buzon [%s]: %s\n" % (
+            f.write("%s VOICEMAIL ALERT: %s filed '%s' (contacto %s, campana %s, callid %s, %ss) over a voicemail [%s]: %s\n" % (
                 datetime.now(TZ).strftime('%F %T'), agente, disposition, contacto_id, campana_id, callid, duracion,
                 idioma or '?', (text or '')[:120].replace('\n', ' ')))
-        print(f"  ⚠ ALERTA BUZON: {agente} puso '{disposition}' sobre un buzon (callid {callid})")
+        print(f"  ⚠ VOICEMAIL ALERT: {agente} filed '{disposition}' over a voicemail (callid {callid})")
     return buzon
 
 def guardar_nota_local(conn, callids, contacto_id, nota):
-    """La nota que escribe la IA queda TAMBIEN en el dialer (dialer_call_audit.nota_crm).
-    La app movil la muestra al instante, sin tener que consultarle a GoHighLevel."""
+    """The AI-written note is ALSO stored in the dialer (dialer_call_audit.nota_crm).
+    The mobile app shows it instantly, without needing to query GoHighLevel."""
     if not nota:
         return
     try:
@@ -380,10 +380,10 @@ def guardar_nota_local(conn, callids, contacto_id, nota):
                               AND fecha > now() - interval '2 hours'""", (nota, contacto_id))
         conn.commit(); cur.close()
     except Exception as e:
-        print(f"  → No se pudo guardar la nota en el dialer: {e}")
+        print(f"  → Could not save the note in the dialer: {e}")
 
 
-# ─── GPT resumen CRM ─────────────────────────────────────────────────────────
+# ─── GPT CRM summary ─────────────────────────────────────────────────────────
 def generate_crm_note(transcript, disposition, duracion_secs=0, is_inbound=False):
     system_prompt = SYSTEM_PROMPT_INBOUND if is_inbound else SYSTEM_PROMPT_OUTBOUND
     resp = requests.post(
@@ -408,7 +408,7 @@ def generate_crm_note(transcript, disposition, duracion_secs=0, is_inbound=False
     print(f"  GPT error {resp.status_code}: {resp.text[:150]}")
     return None
 
-# ─── GHL notas ───────────────────────────────────────────────────────────────
+# ─── GHL notes ───────────────────────────────────────────────────────────────
 def post_ghl_note(ghl_id, body):
     resp = requests.post(
         f'https://services.leadconnectorhq.com/contacts/{ghl_id}/notes',
@@ -436,7 +436,7 @@ def main():
         return
 
     ts = datetime.now(TZ).strftime('%Y-%m-%d %H:%M')
-    print(f"{ts} — {len(rows)} disposición(es) en ventana de 48h")
+    print(f"{ts} — {len(rows)} disposition(s) in the 48h window")
 
     for (disp_id, contacto_id, fecha, modified, disposition, ghl_id, telefono, agente, campana_id) in rows:
         is_inbound = (campana_id == CAMPAIGN_INBOUND)
@@ -444,14 +444,14 @@ def main():
         legacy_key = f"{disp_id}_{modified.isoformat()}"
         is_legacy = legacy_key in state['legacy_keys']
 
-        # Skip disposiciones que no aportan
+        # Skip dispositions that add nothing
         if disposition in SKIP_DISPOSITIONS:
             continue
 
-        # Buscar grabaciones en ventana de 90 min antes de la disposición
+        # Look for recordings in a 90-minute window before the disposition
         recordings = find_recordings(conn, contacto_id, modified, campana_id)
 
-        # ── Caso 1: sin grabaciones en MinIO/llamadalog ──
+        # ── Case 1: no recordings in MinIO/llamadalog ──
         if not recordings:
             if is_legacy:
                 continue
@@ -469,12 +469,12 @@ def main():
                 continue
             note_body = f"📞 {disposition} — {agente}"
             ok = post_ghl_note(ghl_id, note_body)
-            print(f"  disp_id={disp_id} [{tipo_str}] '{disposition}' — Nota simple {'✓' if ok else 'ERROR'} (sin grabación útil)")
+            print(f"  disp_id={disp_id} [{tipo_str}] '{disposition}' — Simple note {'✓' if ok else 'ERROR'} (no useful recording)")
             if ok:
                 state['processed_callids'].add(pseudo_callid)
             continue
 
-        # ── Caso 2: hay grabaciones ──
+        # ── Case 2: there are recordings ──
         if is_legacy:
             for r in recordings:
                 state['processed_callids'].add(str(r[0]))
@@ -486,16 +486,16 @@ def main():
 
         age_min = (datetime.now(tz=timezone.utc) - modified).total_seconds() / 60
         if age_min < 3:
-            print(f"  disp_id={disp_id} [{tipo_str}] '{disposition}' — Reciente ({age_min:.1f} min), espero próxima corrida")
+            print(f"  disp_id={disp_id} [{tipo_str}] '{disposition}' — Recent ({age_min:.1f} min), waiting for next run")
             continue
 
-        print(f"  disp_id={disp_id} [{tipo_str}] '{disposition}' — {len(new_recordings)} callid(s) nuevos")
+        print(f"  disp_id={disp_id} [{tipo_str}] '{disposition}' — {len(new_recordings)} new callid(s)")
 
         if not ghl_id and telefono:
             time.sleep(1.2)
             ghl_id = lookup_ghl_by_phone(telefono)
         if not ghl_id:
-            print(f"  → Sin GHL_ID — marco callids procesados para no reintentar")
+            print(f"  → No GHL_ID — marking callids processed to avoid retrying")
             for r in new_recordings:
                 state['processed_callids'].add(str(r[0]))
             continue
@@ -508,13 +508,13 @@ def main():
                 transcripts.append(cache[callid_key])
                 callids_transcritos.append(callid_key)
                 registrar_audit(conn, callid_key, contacto_id, agente, disposition, campana_id, duracion, cache[callid_key], '')
-                print(f"  → callid {callid_key} desde CACHE ({duracion}s)")
+                print(f"  → callid {callid_key} from CACHE ({duracion}s)")
                 continue
             audio_data, s3_key, size_kb = download_recording(s3, callid_rec, archivo, rec_time, is_inbound=is_inbound)
             if not audio_data:
-                print(f"  → No encontrado en MinIO: callid={callid_rec}")
+                print(f"  → Not found in MinIO: callid={callid_rec}")
                 continue
-            print(f"  → Transcribiendo {s3_key} ({duracion}s, {size_kb}KB)...")
+            print(f"  → Transcribing {s3_key} ({duracion}s, {size_kb}KB)...")
             fname = s3_key.split('/')[-1] if s3_key else f'{callid_rec}.mp3'
             text = transcribe_audio(audio_data, fname)
             if text:
@@ -523,13 +523,13 @@ def main():
                 transcripts.append(text)
                 callids_transcritos.append(callid_key)
                 registrar_audit(conn, callid_key, contacto_id, agente, disposition, campana_id, duracion, text, LAST_LANGUAGE.get('lang', ''))
-                print(f"  → Whisper OK + cacheado [{LAST_LANGUAGE.get('lang','?')}]: {text[:60]}...")
+                print(f"  → Whisper OK + cached [{LAST_LANGUAGE.get('lang','?')}]: {text[:60]}...")
 
         if not transcripts:
             if age_min > 15:
                 note_body = f"📞 {disposition} — {agente}"
                 ok = post_ghl_note(ghl_id, note_body)
-                print(f"  → Nota simple {'✓' if ok else 'ERROR'} (audios no descargables, {age_min:.0f} min)")
+                print(f"  → Simple note {'✓' if ok else 'ERROR'} (recordings not downloadable, {age_min:.0f} min)")
                 if ok:
                     for r in new_recordings:
                         state['processed_callids'].add(str(r[0]))
@@ -542,7 +542,7 @@ def main():
             continue
 
         if crm_note.strip().lower() == 'skip':
-            print(f"  → GPT: skip — marco callids procesados")
+            print(f"  → GPT: skip — marking callids processed")
             for cid in callids_transcritos:
                 state['processed_callids'].add(cid)
             continue
@@ -556,9 +556,9 @@ def main():
         if ok:
             for cid in callids_transcritos:
                 state['processed_callids'].add(cid)
-            print(f"  → Nota GHL publicada ✓ ({len(callids_transcritos)} callid(s) marcados)")
+            print(f"  → GHL note published ✓ ({len(callids_transcritos)} callid(s) marked)")
         else:
-            print(f"  → Error publicando nota GHL — no marco callids, reintentaré")
+            print(f"  → Error publishing GHL note — not marking callids, will retry")
 
     conn.close()
     save_state(state)

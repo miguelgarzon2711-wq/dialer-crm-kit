@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Selector de caller ID Dialer — sticky+cap+rampa. GET /pick?tel=<numero> -> DID (11 dig)."""
+"""Dialer caller ID selector — sticky+cap+ramp. GET /pick?tel=<number> -> DID (11 dig)."""
 import subprocess, re
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -19,12 +19,12 @@ def pick(tel):
 
 
 def inbound_campana(caller):
-    """Devuelve el DID virtual (9000000N) de la campana inbound del grupo del lead, o ''."""
+    """Returns the virtual DID (9000000N) of the lead's group inbound campana, or ''."""
     tel = re.sub(r'\D', '', caller)[-10:]
     if len(tel) < 10:
         return ''
-    # INBOUND STICKY POR VENDEDOR (decisión de producto): si el lead tiene dueño, la llamada
-    # entra SOLO a la cola personal del dueño (DID virtual 900001<id>); si no, al grupo.
+    # PER-REP INBOUND STICKY: if the lead has an owner, the call goes
+    # ONLY to that owner's personal queue (virtual DID 900001<id>); otherwise to the group.
     try:
         out = subprocess.run(
             ['docker', 'exec', 'prod-env-postgresql-1', 'psql', '-U', 'omnileads',
@@ -55,7 +55,7 @@ def inbound_campana(caller):
 
 
 def missed(caller):
-    """Inbound NO contestada -> POST /api/v1/dialer/missed_call/ (lead entra como Llamada Perdida, orden 0)."""
+    """Inbound NOT answered -> POST /api/v1/dialer/missed_call/ (lead enters as Llamada Perdida, orden 0)."""
     tel = re.sub(r'\D', '', caller)[-10:]
     if len(tel) < 10:
         return ''

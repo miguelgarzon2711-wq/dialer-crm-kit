@@ -1,37 +1,36 @@
-# Condiciones de uso
+# Terms of use
 
-Este repositorio es **privado**. El acceso se da por invitación nominal y puede
-retirarse en cualquier momento.
+This repository is **private**. Access is granted by name and can be revoked at any
+time.
 
-## Qué podés hacer
+## What you may do
 
-- Usar este código para montar un dialer para tu propia operación o la de un
-  cliente tuyo.
-- Modificarlo y adaptarlo a tus necesidades.
-- Quedarte con las adaptaciones que hagas.
+- Use this code to build a dialer for your own operation or for a client of yours.
+- Modify and adapt it to your needs.
+- Keep whatever adaptations you make.
 
-## Qué no podés hacer
+## What you may not do
 
-- Redistribuirlo, publicarlo o volverlo público, ni entero ni por partes.
-- Darle acceso a terceros que no hayan sido invitados por el autor.
-- Revenderlo como producto propio.
+- Redistribute, publish or make it public, in whole or in part.
+- Grant access to third parties who were not invited by the author.
+- Resell it as your own product.
 
-## Sin garantía
+## No warranty
 
-El código se entrega tal como está. Corrió en producción, pero cada instalación es
-distinta: la responsabilidad de probarlo antes de ponerlo frente a clientes reales
-es de quien lo instala.
+The code is provided as is. It ran in production, but every installation is different:
+testing it before putting it in front of real customers is the responsibility of
+whoever installs it.
 
-Ojo con dos cosas en particular:
+Two things in particular deserve attention:
 
-- **Telefonía**: un dialer mal configurado puede generar costos altos o llamadas
-  no deseadas. Probá con volumen bajo antes de escalar.
-- **Cumplimiento legal**: llamar y grabar llamadas está regulado, y las reglas
-  cambian según el país y el estado (consentimiento para grabar, horarios
-  permitidos, listas de no llamar). Verificalo antes de operar.
+- **Telephony**: a misconfigured dialer can generate high costs or unwanted calls.
+  Test at low volume before scaling.
+- **Legal compliance**: calling and recording calls is regulated, and the rules vary
+  by country and by state (consent to record, permitted calling hours, do-not-call
+  lists). Verify before operating.
 
-## Software de terceros
+## Third-party software
 
-Este kit se apoya en OMniLeads, Asterisk y otros proyectos de código abierto, pero
-**no los incluye ni los redistribuye**. Cada uno tiene su propia licencia y hay que
-respetarla por separado.
+This kit builds on OMniLeads, Asterisk and other open-source projects, but **does not
+include or redistribute them**. Each carries its own license, which must be honored
+separately.

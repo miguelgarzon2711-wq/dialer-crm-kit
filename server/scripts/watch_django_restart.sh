@@ -1,6 +1,6 @@
 #!/bin/bash
-# Daemon: detecta restart de prod-env-django-app-1 y re-loginea agentes automáticamente.
-# Supervisado por check_dashboard.sh. Log: /var/log/django_restart_watcher.log
+# Daemon: detects a restart of prod-env-django-app-1 and logs agents back in automatically.
+# Supervised by check_dashboard.sh. Log: /var/log/django_restart_watcher.log
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> /var/log/django_restart_watcher.log; }
 
@@ -16,19 +16,19 @@ while read -r ts; do
 
     log "Re-logueando agentes en colas de Asterisk"
     docker exec prod-env-django-app-1 python3 -c "
-# AGENTES: lista de ids. Para tomarlos de la base automaticamente:
+# AGENTES: list of ids. To pull them from the database automatically:
 #   from ominicontacto_app.models import AgenteProfile
 #   AGENTES = list(AgenteProfile.objects.filter(borrado=False).values_list('id', flat=True))
-AGENTES = []   # <-- completar con los ids de tus agentes
+AGENTES = []   # <-- fill in with your agent ids
 import django, os
 os.environ['DJANGO_SETTINGS_MODULE'] = 'ominicontacto.settings.production'
 django.setup()
 from ominicontacto_app.models import AgenteProfile
 from ominicontacto_app.services.asterisk.agent_activity import AgentActivityAmiManager
 mgr = AgentActivityAmiManager()
-# IDs de AgenteProfile — agregar nuevos agentes aqui
-# IDs de los agentes a re-loguear tras un reinicio de la aplicacion.
-# Poner los de tu instalacion, o dejar la consulta de abajo para tomarlos todos.
+# AgenteProfile ids - add new agents here
+# Ids of the agents to log back in after an application restart.
+# Put the ones from your installation, or use the query above to take them all.
 for agent_id in AGENTES:
     try:
         mgr.login_agent(AgenteProfile.objects.get(id=agent_id), manage_connection=True)

@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-BACKFILL de lanzamiento (el operador: "la lista que dijimos"). Corre en el HOST del dialer.
-Lee Supabase (dashboard de el cliente): leads de los ultimos N dias; cruza con citas (Supabase) y con
-etiquetas de GHL (dq / booked / comprador / solo whatsapp). Escribe /root/backfill_leads.json con
-la lista y un resumen. NO inyecta nada (eso lo hace backfill_inject.py dentro de Django).
+Launch BACKFILL (the operator: "the list we talked about"). Runs on the dialer HOST.
+Reads Supabase (the client's dashboard): leads from the last N days; cross-references with appointments (Supabase) and with
+GHL tags (dq / booked / comprador / solo whatsapp). Writes /root/backfill_leads.json with
+the list and a summary. Does NOT inject anything (backfill_inject.py does that inside Django).
 
 Buckets:
-  - excluido_cita:        tiene cita (no cancelada) -> no se llama
-  - excluido_dq:          etiqueta dq*/booked/comprador/solo-whatsapp/wa-prefiere en GHL
-  - excluido_sin_tel:     telefono no USA
-  - pool:                 sin respuesta del vendedor -> cola de todos (Seguimiento)
-  - asignado:             el vendedor ya le respondio -> cola de ESE vendedor (si esta en el dialer); si no, pool
-Uso: python3 /root/backfill_prepare.py --dias 7
+  - excluido_cita:        has an appointment (not cancelled) -> not called
+  - excluido_dq:          dq*/booked/comprador/solo-whatsapp/wa-prefiere tag in GHL
+  - excluido_sin_tel:     non-USA phone
+  - pool:                 no reply from the salesperson -> everyone's queue (Seguimiento)
+  - asignado:             the salesperson already replied -> THAT salesperson's queue (if they're in the dialer); if not, pool
+Usage: python3 /root/backfill_prepare.py --dias 7
 """
 import os, sys, json, argparse, subprocess, urllib.parse, time, re
 from datetime import datetime, timedelta, timezone
@@ -25,10 +25,10 @@ for line in open("/root/.env_dialer"):
         k, v = line.strip().split("=", 1); env[k] = v
 U, K = env.get("SUPABASE_URL", ""), env.get("SUPABASE_SERVICE_KEY", "")
 GT, LOC = env.get("GHL_API_TOKEN", ""), env.get("GHL_LOCATION_ID", "")
-assert U and K, "faltan SUPABASE_URL / SUPABASE_SERVICE_KEY en /root/.env_dialer"
+assert U and K, "missing SUPABASE_URL / SUPABASE_SERVICE_KEY in /root/.env_dialer"
 
 def sb(path, page=1000):
-    """GET paginado (PostgREST corta en 1000 filas por respuesta)."""
+    """Paginated GET (PostgREST cuts off at 1000 rows per response)."""
     out, off = [], 0
     while True:
         sep = "&" if "?" in path else "?"
@@ -43,15 +43,15 @@ def sb(path, page=1000):
             except Exception:
                 pass
             j = None; time.sleep(2)
-        if j is None: raise SystemExit("Supabase no responde: " + path)
+        if j is None: raise SystemExit("Supabase not responding: " + path)
         out.extend(j)
         if len(j) < page: return out
         off += page
 
 def ghl_get(url, clave=None):
-    """GET a GHL con manejo de rate-limit (429) y respuestas de error en JSON: si la respuesta no
-    trae la clave esperada se reintenta con espera creciente; si sigue fallando devuelve None
-    (el lead se cuenta como ghl_error y NO se inyecta a ciegas)."""
+    """GET to GHL with rate-limit (429) handling and JSON error responses: if the response doesn't
+    carry the expected key it's retried with increasing backoff; if it still fails it returns None
+    (the lead is counted as ghl_error and is NOT injected blindly)."""
     for i in range(6):
         r = subprocess.run(["curl", "-s", "-m", "25", "-w", "\n%{http_code}", "-H", "Authorization: Bearer " + GT,
                             "-H", "Version: 2021-07-28", url], capture_output=True, text=True).stdout
@@ -66,7 +66,7 @@ def ghl_get(url, clave=None):
     return None
 
 def ghl_tags(cid):
-    """Devuelve (tags, assignedTo) del contacto en GHL (o (['__error__'],'') si GHL no responde)."""
+    """Returns (tags, assignedTo) of the contact in GHL (or (['__error__'],'') if GHL doesn't respond)."""
     if a.sin_ghl or not GT: return ([], "")
     j = ghl_get("https://services.leadconnectorhq.com/contacts/" + cid, "contact")
     if j is None: return (["__error__"], "")
@@ -74,10 +74,10 @@ def ghl_tags(cid):
     return ([t.lower() for t in (c.get("tags") or [])], (c.get("assignedTo") or "").strip())
 
 def tiene_conversacion(cid):
-    """True si el lead ya conversa por WhatsApp: escribio al menos una vez DESPUES de un mensaje
-    saliente (del vendedor o del bot). El primer mensaje del lead (el del anuncio) no cuenta.
-    Regla decisión de producto: esos los termina de convertir el vendedor por WhatsApp; no entran al dialer.
-    Devuelve None si GHL no respondio (se cuenta como error)."""
+    """True if the lead is already conversing via WhatsApp: they wrote at least once AFTER an
+    outbound message (from the salesperson or the bot). The lead's first message (the ad one) doesn't count.
+    Product decision rule: the salesperson finishes converting those via WhatsApp; they don't enter the dialer.
+    Returns None if GHL didn't respond (counted as an error)."""
     if a.sin_ghl or not GT: return False
     j = ghl_get("https://services.leadconnectorhq.com/conversations/search?locationId=%s&contactId=%s" % (LOC, cid), "conversations")
     if j is None: return None
@@ -131,14 +131,14 @@ for l, (tags, assigned_to, conv) in zip(leads, tags_all):
     if l["ghl_contact_id"] in con_cita: resumen["excluido_cita"] += 1; continue
     if es_dq(tags): resumen["excluido_dq"] += 1; continue
     if len(tel) != 10: resumen["excluido_sin_tel"] += 1; continue
-    if conv: resumen["excluido_conversacion"] += 1; continue           # ya conversa por WhatsApp -> lo trabaja el vendedor
+    if conv: resumen["excluido_conversacion"] += 1; continue           # already conversing via WhatsApp -> the salesperson handles it
     camp, cname = campana_de(l.get("ad_id"))
-    bucket = "pool"                                                        # sin vendedor -> cola de todos
+    bucket = "pool"                                                        # no salesperson -> everyone's queue
     resumen[bucket] += 1; por_camp[camp] += 1
     out.append({"ghl_id": l["ghl_contact_id"], "phone": tel, "nombre": (l.get("full_name") or "").strip() or tel,
                 "campana": camp, "campana_ads": cname, "bucket": bucket, "seller_ghl": l.get("seller_id"), "assigned_to_ghl": assigned_to,
                 "seller_nombre": sellers.get(l.get("seller_id") or "", ""), "created_at": l["created_at"], "tags": tags})
-out.sort(key=lambda o: o["created_at"], reverse=True)   # recientes primero
+out.sort(key=lambda o: o["created_at"], reverse=True)   # most recent first
 json.dump(out, open("/root/backfill_leads.json", "w"), indent=1, ensure_ascii=False)
 resumen["por_campana"] = por_camp
 resumen["asignado_por_vendedor"] = {}
@@ -146,4 +146,4 @@ for o in out:
     if o["bucket"] == "asignado":
         resumen["asignado_por_vendedor"][o["seller_nombre"] or "?"] = resumen["asignado_por_vendedor"].get(o["seller_nombre"] or "?", 0) + 1
 print(json.dumps(resumen, indent=1, ensure_ascii=False))
-print("archivo:", "/root/backfill_leads.json", "leads a inyectar:", len(out))
+print("file:", "/root/backfill_leads.json", "leads to inject:", len(out))

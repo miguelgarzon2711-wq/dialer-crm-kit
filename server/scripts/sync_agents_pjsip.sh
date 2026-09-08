@@ -1,9 +1,9 @@
 #!/bin/bash
-# Red de seguridad de la sección USUARIOS del dashboard.
-# Asegura que cada AGENTE activo (fuente de verdad = base de datos) tenga su endpoint
-# PJSIP en Asterisk. SOLO AGREGA los que falten (append-only): nunca reescribe ni borra,
-# así que no puede romper la config existente (supervisores, agentes previos).
-# Hace que los agentes creados desde la sección USUARIOS persistan ante reinicios.
+# Safety net for agents created outside the Asterisk config.
+# Ensures every active AGENT (source of truth = the database) has its PJSIP
+# endpoint in Asterisk. It ONLY ADDS missing ones (append-only): it never rewrites or deletes,
+# so it cannot break the existing config (supervisors, previously created agents).
+# This is what makes newly created agents survive restarts.
 CONF=/etc/asterisk/retrieve_conf/oml_pjsip_agents.conf
 ADDED=0
 LINES=$(docker exec -w /opt/omnileads/ominicontacto prod-env-django-app-1 python3 -c "
@@ -26,4 +26,4 @@ while IFS='|' read -r SIP CID; do
   fi
 done <<< "$LINES"
 [ "$ADDED" -gt 0 ] && docker exec prod-env-acd-1 asterisk -rx "pjsip reload" >/dev/null 2>&1
-echo "sync_agents_pjsip: $ADDED agente(s) agregado(s) desde DB"
+echo "sync_agents_pjsip: $ADDED agent(s) added from the DB"

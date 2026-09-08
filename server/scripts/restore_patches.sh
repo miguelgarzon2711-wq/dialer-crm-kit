@@ -1,5 +1,5 @@
 #!/bin/bash
-# Restore el cliente v1 (2026-08-21): nginx conf OML + certs. Crece con el proyecto (campañas, agentes, etc.)
+# Patch restore: nginx OML conf + certs. Grows with the project (campaigns, agents, etc.)
 LOG=/var/log/restore_patches.log
 NGINX=$(docker ps --format '{{.Names}}' | grep nginx | head -1)
 if [ -n "$NGINX" ]; then
@@ -7,30 +7,30 @@ if [ -n "$NGINX" ]; then
     docker cp /opt/dialer-kit/patches/nginx/ominicontacto.conf $NGINX:/etc/nginx/conf.d/ominicontacto.conf
     docker cp /opt/dialer-kit/patches/nginx/environment $NGINX:/etc/nginx/conf.d/environment
     docker exec $NGINX nginx -s reload
-    echo "$(date): nginx conf OML restaurada en $NGINX" >> $LOG
+    echo "$(date): nginx conf OML restored on $NGINX" >> $LOG
   fi
 fi
 echo "$(date): restore_patches OK" >> $LOG
 
-# Parche anti-autofinalizacion de campanas Preview (decisión de producto)
+# Anti-autofinalize patch for Preview campaigns (product decision)
 if ! docker exec prod-env-django-app-1 grep -q 'PATCH' /opt/omnileads/ominicontacto/ominicontacto_app/models.py 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/models.py.patched prod-env-django-app-1:/opt/omnileads/ominicontacto/ominicontacto_app/models.py
   docker restart prod-env-django-app-1
-  echo "$(date): models.py re-parcheado (anti-autofinalize)" >> /var/log/restore_patches.log
+  echo "$(date): models.py re-patched (anti-autofinalize)" >> /var/log/restore_patches.log
 fi
 
-# Queues de campañas Preview (2026-08-22)
+# Preview campaign queues (2026-08-22)
 if ! docker exec prod-env-acd-1 grep -q '1_Grupo 1' /etc/asterisk/oml_queues_override.conf 2>/dev/null; then
   cat /opt/dialer-kit/patches/queues.conf | docker exec -i prod-env-acd-1 tee /etc/asterisk/oml_queues_override.conf > /dev/null
   docker exec prod-env-acd-1 asterisk -rx 'module reload app_queue.so'
-  echo "$(date): queues Preview restauradas" >> /var/log/restore_patches.log
+  echo "$(date): queues Preview restored" >> /var/log/restore_patches.log
 fi
 
-# Parche caller ID sticky+rampa en dialplan (2026-08-22)
+# Sticky+ramp caller ID patch in the dialplan (2026-08-22)
 if ! docker exec prod-env-acd-1 grep -q 'PATCH CID' /etc/asterisk/oml_extensions_precall.conf 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/oml_extensions_precall.conf.patched prod-env-acd-1:/etc/asterisk/oml_extensions_precall.conf
   docker exec prod-env-acd-1 asterisk -rx 'dialplan reload'
-  echo "$(date): dialplan CID re-parcheado" >> /var/log/restore_patches.log
+  echo "$(date): dialplan CID re-patched" >> /var/log/restore_patches.log
 fi
 systemctl is-active did-picker >/dev/null || systemctl restart did-picker
 
@@ -39,28 +39,28 @@ if ! docker exec prod-env-django-app-1 test -f /opt/omnileads/ominicontacto/api_
   docker cp /opt/dialer-kit/patches/crm_webhooks.py prod-env-django-app-1:/opt/omnileads/ominicontacto/api_app/views/crm_webhooks.py
   docker cp /opt/dialer-kit/patches/api_urls.py.patched prod-env-django-app-1:/opt/omnileads/ominicontacto/api_app/urls.py
   docker restart prod-env-django-app-1
-  echo "$(date): endpoint crm_webhooks restaurado" >> /var/log/restore_patches.log
+  echo "$(date): endpoint crm_webhooks restored" >> /var/log/restore_patches.log
 fi
 
-# API de la APP MOVIL (2026-09-04)
+# MOBILE APP API
 if ! docker exec prod-env-django-app-1 test -f /opt/omnileads/ominicontacto/api_app/views/agent_api.py 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/agent_api.py prod-env-django-app-1:/opt/omnileads/ominicontacto/api_app/views/agent_api.py
   docker cp /opt/dialer-kit/patches/api_urls.py.patched prod-env-django-app-1:/opt/omnileads/ominicontacto/api_app/urls.py
   docker restart prod-env-django-app-1
-  echo "$(date): api app movil restaurada" >> /var/log/restore_patches.log
+  echo "$(date): mobile app api restored" >> /var/log/restore_patches.log
 fi
 
-# Motor disposiciones GHL + env (2026-08-22)
-# STICKY DE POR VIDA (2026-09-03)
+# GHL disposition engine + env (2026-08-22)
+# LIFETIME STICKY (2026-09-03)
 if ! docker exec prod-env-django-app-1 test -f /opt/omnileads/ominicontacto/api_app/views/lead_ownership.py 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/lead_ownership.py prod-env-django-app-1:/opt/omnileads/ominicontacto/api_app/views/lead_ownership.py
-  echo "$(date): lead_ownership restaurado" >> /var/log/restore_patches.log
+  echo "$(date): lead_ownership restored" >> /var/log/restore_patches.log
 fi
 if ! docker exec prod-env-django-app-1 test -f /opt/omnileads/ominicontacto/api_app/views/crm_dispositions.py 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/crm_dispositions.py prod-env-django-app-1:/opt/omnileads/ominicontacto/api_app/views/crm_dispositions.py
   docker cp /root/.env_dialer prod-env-django-app-1:/opt/omnileads/.env_dialer
   docker exec prod-env-django-app-1 chmod 644 /opt/omnileads/.env_dialer
-  echo "$(date): motor dispo GHL restaurado" >> /var/log/restore_patches.log
+  echo "$(date): GHL dispo engine restored" >> /var/log/restore_patches.log
 fi
 
 # uwsgi 4 workers (2026-08-22)
@@ -104,14 +104,14 @@ if ! docker exec prod-env-dialer-acd-dialplan-1 grep -q '_delayed_decr' /app/app
   docker restart prod-env-dialer-acd-dialplan-1
 fi
 
-# Template disposición con control de flujo (2026-08-26)
+# Disposition template with call-flow control
 if ! docker exec prod-env-django-app-1 grep -q 'callInitiatedTimer' /opt/omnileads/ominicontacto/ominicontacto_app/templates/formulario/calificacion_create_update_agente.html 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/calificacion_create_update_agente.html prod-env-django-app-1:/opt/omnileads/ominicontacto/ominicontacto_app/templates/formulario/calificacion_create_update_agente.html
   docker restart prod-env-django-app-1
   echo "$(date): template disposicion restaurado" >> /var/log/restore_patches.log
 fi
 
-# Kamailio TLS cfg (certs correctos — sin esto el webphone da SIP Proxy no responde) (2026-09-02)
+# SIP proxy TLS config (correct certs - without this the softphone reports SIP Proxy not responding)
 if ! docker exec prod-env-kamailio-webrtc-1 grep -q 'certs/cert.pem' /etc/kamailio/tls.cfg 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/kamailio_tls.cfg.patched prod-env-kamailio-webrtc-1:/etc/kamailio/tls.cfg
   docker restart prod-env-kamailio-webrtc-1
@@ -125,7 +125,7 @@ if ! docker exec prod-env-nginx-1 grep -q 'proxy_ssl_protocols' /etc/nginx/conf.
   echo "$(date): nginx /ws restaurado" >> /var/log/restore_patches.log
 fi
 
-# Template preview con Ir al CRM + historial + Saltar WA (2026-09-02)
+# Preview template with the CRM link and disposition history
 if ! docker exec prod-env-django-app-1 grep -q 'CRM_LOCATION_ID' /opt/omnileads/ominicontacto/ominicontacto_app/templates/agente/campanas_preview.html 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/campanas_preview.html.patched prod-env-django-app-1:/opt/omnileads/ominicontacto/ominicontacto_app/templates/agente/campanas_preview.html
   docker restart prod-env-django-app-1
@@ -138,7 +138,7 @@ if ! docker exec prod-env-acd-1 grep -q '^\[oml-outr\]' /etc/asterisk/oml_extens
   echo "$(date): oml-outr-1 restaurado" >> /var/log/restore_patches.log
 fi
 
-# INBOUND STICKY POR VENDEDOR (2026-09-03): asegurar Redis de las campañas inbound personales
+# PER-REP INBOUND STICKY: make sure Redis holds the personal inbound campaigns
 if [ -f /root/agent_inbound.json ]; then python3 /root/inbound_redis_sync.py >> /var/log/restore_patches.log 2>&1; fi
 
 # MASCARA + ORDEN ALFABETICO (2026-09-03): archivos OML parcheados

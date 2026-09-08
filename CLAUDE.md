@@ -1,283 +1,280 @@
-# Instrucciones para el agente que instala este kit
+# Instructions for the agent installing this kit
 
-> Si sos un asistente de IA (Claude Code o similar) y te pidieron montar este dialer:
-> **leé este archivo entero antes de escribir un solo comando.** Está escrito para vos.
-> Cada regla de acá salió de romper algo en producción y tener que arreglarlo.
+> If you are an AI assistant (Claude Code or similar) and someone asked you to set up
+> this dialer: **read this file completely before running a single command.** It was
+> written for you. Every rule here came from breaking something in production and
+> having to fix it.
 
 ---
 
-## 1. Qué es esto y qué NO es
+## 1. What this is and what it is not
 
-Es un **kit de integración**, no un producto instalable de un click.
+This is an **integration kit**, not a one-click product.
 
-Asume que ya existe (o vas a instalar) un **OMniLeads** funcionando en un servidor
-propio. OMniLeads es un contact center de código abierto sobre Asterisk + Django +
-PostgreSQL + Redis, corriendo en contenedores Docker. Este kit le agrega encima:
+It assumes a working **OMniLeads** installation on your own server (or that you are
+about to install one). OMniLeads is an open-source contact center built on Asterisk,
+Django, PostgreSQL and Redis, running in Docker containers. This kit adds:
 
-| Lo que agrega | Para qué |
+| What it adds | Why |
 |---|---|
-| Integración con un CRM (probado con GoHighLevel) | los leads entran solos y los resultados vuelven solos |
-| Prioridades de marcación | llamar primero al que más probabilidad tiene de contestar |
-| Dueño permanente del lead ("sticky") | que dos vendedores no se peleen el mismo cliente |
-| Rotación de caller ID | que los números no se quemen como "Spam Likely" |
-| Transcripción con IA | notas automáticas en el CRM y auditoría de buzones |
-| API REST para clientes móviles | que un vendedor sin computador pueda trabajar |
-| Persistencia de parches | que nada se pierda al reiniciar los contenedores |
+| CRM integration (tested with GoHighLevel) | leads come in on their own and results go back on their own |
+| Dialing priorities | call the person most likely to answer first |
+| Permanent lead ownership ("sticky") | two reps never fight over the same customer |
+| Caller ID rotation | your numbers do not get flagged as "Spam Likely" |
+| AI transcription | automatic CRM notes and voicemail auditing |
+| REST API for mobile clients | a rep without a computer can still work |
+| Patch persistence | nothing is lost when containers restart |
 
-**No incluye:** OMniLeads en sí, la app móvil, ni ninguna credencial. Todo lo que
-diga `<ALGO_ASI>` lo tenés que reemplazar con datos del cliente.
+**Not included:** OMniLeads itself, the mobile app, or any credentials. Anything
+written as `<LIKE_THIS>` you must replace with the client's real values.
 
 ---
 
-## 2. Reglas duras — romper una de estas cuesta horas
+## 2. Hard rules — breaking one of these costs hours
 
-Estas no son sugerencias. Cada una corresponde a un incidente real.
+These are not suggestions. Each maps to a real incident.
 
-### 2.1 Nunca `docker compose up`
-OMniLeads levanta contenedores con prefijos de hash. Un `docker compose up` los
-mata y los recrea, y perdés todo lo que hay dentro. **Usá siempre operaciones
-individuales:** `docker exec`, `docker cp`, `docker restart <nombre>`, `docker start/stop`.
+### 2.1 Never run `docker compose up`
+OMniLeads brings up containers with hash prefixes. `docker compose up` kills and
+recreates them, and you lose everything inside. **Always use individual operations:**
+`docker exec`, `docker cp`, `docker restart <name>`, `docker start/stop`.
 
-### 2.2 Todo lo que edites dentro de un contenedor, guardalo afuera también
-Los contenedores se recrean. Si parcheás un archivo con `docker exec` y no dejás
-copia en el host, el próximo reinicio lo borra y el sistema vuelve a fallar sin
-que nadie entienda por qué. **Flujo correcto:** editás la copia local en
-`/opt/dialer-kit/patches/`, la copiás al contenedor con `docker cp`, y agregás el
-bloque correspondiente a `restore_patches.sh`.
+### 2.2 Anything you edit inside a container, keep a copy outside
+Containers get recreated. If you patch a file with `docker exec` and leave no copy on
+the host, the next restart wipes it and the system fails again with nobody
+understanding why. **Correct flow:** edit the local copy in `/opt/dialer-kit/patches/`,
+copy it into the container with `docker cp`, then add the matching block to
+`restore_patches.sh`.
 
-### 2.3 Validá la sintaxis ANTES de copiar al contenedor
-Un archivo Python con un error de sintaxis tumba Django entero y el dialer queda
-muerto hasta que alguien lo note.
+### 2.3 Validate syntax BEFORE copying into the container
+A Python file with a syntax error takes down all of Django, and the dialer stays dead
+until someone notices.
 ```bash
-python3 -c "import ast; ast.parse(open('archivo.py').read())" && echo OK
+python3 -c "import ast; ast.parse(open('file.py').read())" && echo OK
 bash -n script.sh && echo OK
 ```
-Hacelo siempre. Sin excepción.
+Do this every time. No exceptions.
 
-### 2.4 En PostgreSQL, un error de SQL aborta la transacción entera
-Aunque captures la excepción en Python. Si dentro de una petición hacés una
-consulta que falla (por ejemplo a una columna que no existe), **todo lo que venga
-después en esa misma petición falla también**, incluida la entrega del lead al
-vendedor. El síntoma es desconcertante: "el lead se pierde".
+### 2.4 In PostgreSQL, one SQL error aborts the whole transaction
+Even if you catch the exception in Python. If a query inside a request fails (say, on
+a column that does not exist), **everything after it in that same request fails too**,
+including handing the lead to the rep. The symptom is baffling: "the lead disappears."
 
-La defensa es envolver cada consulta opcional en su propio savepoint:
+The defense is to wrap every optional query in its own savepoint:
 ```python
 from django.db import transaction, connection
 try:
     with transaction.atomic(), connection.cursor() as cur:
         cur.execute("SELECT ...")
 except Exception:
-    pass   # esta consulta falló, pero la petición sigue viva
+    pass   # this query failed, but the request survives
 ```
 
-### 2.5 La central solo marca dígitos
-Un teléfono con `+`, espacios o guiones **hace morir la llamada en silencio**: no
-hay error, no hay log, simplemente no pasa nada y el vendedor cree que el número
-no existe. Normalizá a 10 dígitos (o el largo que use el país) antes de marcar,
-en TODOS los caminos: al inyectar el lead, al marcar desde la consola, al marcar
-desde la API, y con un cron de red de seguridad.
+### 2.5 The switch only dials digits
+A phone number with `+`, spaces or dashes **kills the call silently**: no error, no
+log, nothing happens, and the rep assumes the number is dead. Normalize to 10 digits
+(or whatever length the country uses) before dialing, on EVERY path: lead injection,
+dialing from the console, dialing from the API, plus a cron job as a safety net.
 
-### 2.6 Antes de cambiar algo del dialer en producción, avisá y esperá el OK
-Contenedores, Django, Asterisk y base de datos son sistemas vivos con gente
-trabajando encima. Explicá qué vas a tocar y qué puede pasar. Es preferible
-preguntar de más.
+### 2.6 Before changing anything in production, say so and wait for approval
+Containers, Django, Asterisk and the database are live systems with people working on
+top of them. Explain what you are touching and what could happen. Better to ask too
+often than too little.
 
-### 2.7 Nunca toques el ruteo de nginx
-Los encabezados de caché están bien. Las reglas de proxy y ruteo no: un cambio
-ahí deja el webphone sin señal (error 502 en `/ws`) y nadie puede llamar.
+### 2.7 Never touch nginx routing
+Cache headers are fine. Proxy and routing rules are not: one change there leaves the
+softphone with no signaling (502 on `/ws`) and nobody can call.
 
-### 2.8 Probá con una llamada REAL
-Que la configuración "se vea bien" no significa nada. Un trunk mal nombrado, un
-contexto de dialplan faltante o un prefijo mal puesto solo aparecen cuando marcás
-de verdad y escuchás. Hacé la llamada, escuchá el audio de ida y de vuelta, colgá
-y verificá que el registro quedó guardado.
+### 2.8 Test with a REAL call
+Configuration that "looks right" means nothing. A mistyped trunk endpoint, a missing
+dialplan context or a wrong prefix only surface when you actually dial and listen.
+Make the call, hear audio both ways, hang up, and confirm the record was saved.
 
 ---
 
-## 3. Orden de instalación
+## 3. Installation order
 
-No te saltes pasos ni cambies el orden. Cada uno depende del anterior.
+Do not skip steps or reorder them. Each depends on the previous one.
 
-### Paso 0 — Entender el negocio antes de tocar código
-No arranques hasta poder responder esto. Preguntale al cliente:
+### Step 0 — Understand the business before touching code
+Do not start until you can answer these. Ask the client:
 
-1. ¿De dónde vienen los leads? (formulario, WhatsApp, anuncios, base vieja)
-2. ¿Cuántos por día? ¿Cuántos vendedores?
-3. ¿Cuál es el resultado que busca una llamada? (agendar cita, vender, calificar)
-4. ¿Los vendedores compiten por los leads o cada uno tiene los suyos?
-5. **¿Un lead que ya habló con un vendedor debe quedarse con ese vendedor?**
-   (casi siempre sí, y define toda la lógica de "sticky")
-6. ¿Qué resultados posibles tiene una llamada? Esa lista son las disposiciones.
-7. ¿En qué horario se llama? ¿Qué zona horaria?
-8. ¿Cuántas veces se intenta un lead antes de rendirse?
+1. Where do the leads come from? (form, WhatsApp, ads, old database)
+2. How many per day? How many reps?
+3. What outcome is a call trying to produce? (book an appointment, sell, qualify)
+4. Do reps compete for leads, or does each own theirs?
+5. **Should a lead that already spoke with a rep stay with that rep?**
+   (almost always yes, and it drives the entire "sticky" logic)
+6. What are the possible outcomes of a call? That list is your dispositions.
+7. What hours do they call? What time zone?
+8. How many times is a lead attempted before giving up?
 
-Escribí las respuestas en un archivo del proyecto. Vas a volver a ellas todo el tiempo.
+Write the answers into a project file. You will come back to them constantly.
 
-### Paso 1 — Servidor y OMniLeads
-- Servidor propio (no compartido). Referencia de tamaño: 4 vCPU / 8 GB para ~20
-  agentes simultáneos. Ojo con la zona horaria del sistema.
-- Instalá OMniLeads siguiendo su documentación oficial.
-- Verificá que entrás a la consola web y que un agente puede loguearse.
-- **Todavía no toques nada de este kit.**
+### Step 1 — Server and OMniLeads
+- Dedicated server, not shared. Sizing reference: 4 vCPU / 8 GB for ~20 concurrent agents.
+- Watch the system time zone.
+- Install OMniLeads following its official documentation.
+- Verify you can reach the web console and an agent can log in.
+- **Do not touch anything in this kit yet.**
 
-### Paso 2 — Cerrar el servidor (hacelo AHORA, no al final)
-Un dialer recién instalado con puertos abiertos es un blanco. En un caso real,
-atacantes registraron softphones haciéndose pasar por agentes en menos de un día.
+### Step 2 — Lock down the server (do this NOW, not at the end)
+A freshly installed dialer with open ports is a target. In a real case, attackers
+registered softphones posing as agents in under a day.
 ```bash
-bash server/scripts/firewall.sh          # cierra puertos internos al exterior
-bash server/scripts/purge_sip_intruders.sh   # borra registros que no vengan del proxy
+bash server/scripts/firewall.sh              # closes internal ports to the outside
+bash server/scripts/purge_sip_intruders.sh   # drops registrations not coming from the proxy
 ```
-Leé los dos scripts antes de correrlos y adaptá el nombre de la interfaz de red.
-Dejá el firewall como servicio de systemd para que sobreviva a los reinicios.
+Read both scripts before running them and adjust the network interface name. Install
+the firewall as a systemd service so it survives reboots.
 
-### Paso 3 — Telefonía
-Contratá el proveedor SIP, comprá los números y configurá el trunk.
-Leé `docs/05-TELEFONIA.md` completo: ahí están los errores clásicos que hacen
-perder un día entero (el nombre del endpoint del trunk, el formato E.164, y el
-contexto de ruta saliente que hay que crear a mano porque el generador nativo
-de OMniLeads no lo arma bien).
+### Step 3 — Telephony
+Sign up with the SIP provider, buy the numbers, configure the trunk.
+Read `docs/05-TELEPHONY.md` in full: it lists the classic mistakes that cost a full
+day (the trunk endpoint name, E.164 format, and the outbound route context you must
+write by hand because the OMniLeads generator does not build it correctly).
 
-**Terminá este paso con una llamada real que suene y se escuche en los dos sentidos.**
+**Finish this step with a real call that rings and has audio both ways.**
 
-### Paso 4 — Base de datos
+### Step 4 — Database
 ```bash
 docker exec -i prod-env-postgresql-1 psql -U omnileads -d omnileads < server/sql/schema.sql
 ```
 
-### Paso 5 — Credenciales
+### Step 5 — Credentials
 ```bash
 cp .env.example /root/.env_dialer
-chmod 600 /root/.env_dialer      # importante
+chmod 600 /root/.env_dialer      # important
 ```
-Completá cada variable. Nunca las escribas dentro del código ni las subas a git.
+Fill in every variable. Never write them into the code or commit them.
 
-### Paso 6 — Integración con el CRM
-Copiá los módulos de `server/django/` al contenedor de Django, agregá las rutas y
-reiniciá. Leé `docs/03-INTEGRACION-CRM.md` para la estructura exacta de los
-webhooks y probá con un lead de mentira antes de conectar el flujo real.
+### Step 6 — CRM integration
+Copy the modules from `server/django/` into the Django container, add the routes and
+restart. Read `docs/03-CRM-INTEGRATION.md` for the exact webhook payloads, and test
+with a fake lead before wiring up the real flow.
 
-### Paso 7 — Automatizaciones
-Instalá los crons de `server/scripts/`. La tabla completa está en
-`docs/07-OPERACION.md`. Empezá por los de seguridad y persistencia.
+### Step 7 — Automation
+Install the cron jobs from `server/scripts/`. The full table is in
+`docs/07-OPERATIONS.md`. Start with the security and persistence ones.
 
-### Paso 8 — Persistencia
-Adaptá `server/scripts/restore_patches.sh` a tu instalación y agregalo al arranque:
+### Step 8 — Persistence
+Adapt `server/scripts/restore_patches.sh` to your installation and add it to boot:
 ```
 @reboot sleep 90 && bash /opt/dialer-kit/scripts/restore_patches.sh
 ```
-**Probalo de verdad:** reiniciá el servidor y verificá que el dialer vuelve solo.
-Un kit que no sobrevive un reinicio no está terminado.
+**Actually test it:** reboot the server and confirm the dialer comes back by itself.
+A kit that does not survive a reboot is not finished.
 
-### Paso 9 — Prueba de fuego antes de entregar
-- Llamada saliente real, con audio en los dos sentidos.
-- Llamada entrante que llega al vendedor correcto.
-- Un lead entra por el webhook y aparece en la cola.
-- El vendedor lo toma, lo llama, lo dispone, y el resultado aparece en el CRM.
-- Reiniciar el servidor y que todo siga funcionando.
-- Dos vendedores tomando leads a la vez sin pisarse.
+### Step 9 — Acceptance test before handover
+- Real outbound call, audio both ways.
+- Inbound call reaching the right rep.
+- A lead enters through the webhook and shows up in the queue.
+- A rep takes it, calls it, dispositions it, and the result appears in the CRM.
+- Reboot the server and everything still works.
+- Two reps taking leads at the same time without collisions.
 
 ---
 
-## 4. Cómo adaptarlo a un cliente distinto
+## 4. Adapting it to a different client
 
-### 4.1 Lo que SIEMPRE hay que cambiar
-| Qué | Dónde |
+### 4.1 What ALWAYS needs changing
+| What | Where |
 |---|---|
-| Credenciales del CRM, proveedor SIP, IA | `/root/.env_dialer` |
-| Tipos de lead y prioridades | `TIPO_ORDEN` en `crm_webhooks.py` |
-| Disposiciones y cuáles cuentan como "contestó" | `CONTESTO` / `NO_CONTESTO` en `crm_dispositions.py` |
-| Tags que se escriben en el CRM | `crm_dispositions.py` |
-| Números y tope diario por número | `did_picker.py` |
-| Colas y campañas | `server/asterisk/queues.conf.example` |
-| Idioma y contexto de la transcripción | `transcribe_calls.py` |
-| Zona horaria | sistema y `settings` de Django |
+| CRM, SIP provider and AI credentials | `/root/.env_dialer` |
+| Lead types and priorities | `TIPO_ORDEN` in `crm_webhooks.py` |
+| Dispositions and which count as "answered" | `CONTESTO` / `NO_CONTESTO` in `crm_dispositions.py` |
+| Tags written back to the CRM | `crm_dispositions.py` |
+| Numbers and daily cap per number | `did_picker.py` |
+| Queues and campaigns | `server/asterisk/queues.conf.example` |
+| Transcription language and business context | `transcribe_calls.py` |
+| Time zone | system and Django settings |
 
-### 4.2 Lo que probablemente sirve tal cual
-El sticky de dueño, la normalización de teléfonos, el firewall, la persistencia
-de parches, la liberación de leads abandonados y la estructura de la API.
+### 4.2 What probably works as is
+Lead ownership, phone normalization, the firewall, patch persistence, abandoned-lead
+release, and the API structure.
 
-### 4.3 Si el CRM no es GoHighLevel
-El diseño ya separa las capas. Reescribí solo las funciones que hablan HTTP con
-el CRM (`_try(...)`, las llamadas a `requests` en `crm_dispositions.py` y
-`crm_webhooks.py`). La lógica de prioridades, sticky y disposiciones no depende
-del CRM y se queda igual. Está detallado al final de `docs/03-INTEGRACION-CRM.md`.
-
----
-
-## 5. Decisiones de diseño que conviene respetar
-
-Podés cambiarlas, pero entendé primero por qué están así.
-
-**El servidor decide, el cliente solo pinta.** Ni la consola web ni la app móvil
-deciden nada: piden y muestran. Así el comportamiento es idéntico en todos los
-dispositivos y una regla se cambia en un solo lugar.
-
-**El número del lead nunca sale del servidor.** El cliente recibe `***-***-1234`.
-El vendedor marca por id de contacto, no por número. Es lo que impide que alguien
-se lleve la base de datos en el celular.
-
-**Un lead que conversó tiene dueño para siempre.** Basta una sola conversación real
-para que ese lead sea de ese vendedor: rediscados, callbacks y entrantes vuelven
-siempre a la misma persona. Sin esto se pelean las comisiones. Que después no
-conteste no le quita el dueño.
-
-**Sin calificar la última llamada no hay llamada nueva.** Si no, aparecen llamadas
-huérfanas sin resultado y las métricas quedan inservibles.
-
-**Sesión única por vendedor.** El último dispositivo que entra saca al anterior.
-Dos sesiones del mismo agente compiten por el mismo teléfono SIP y ninguna funciona bien.
-
-**Con un lead en pantalla no entran llamadas.** Si no, al vendedor le entra una
-llamada mientras está por marcar y pierde el lead que tenía.
-
-**Todo cron debe auto-repararse en los dos sentidos.** No asumas que una orden
-previa llegó. Compará el estado real contra el deseado y corregí en ambas
-direcciones: así el sistema se recupera solo de un reinicio de cualquier pieza.
+### 4.3 If the CRM is not GoHighLevel
+The design already separates the layers. Rewrite only the functions that talk HTTP to
+the CRM (`_try(...)` and the `requests` calls in `crm_dispositions.py` and
+`crm_webhooks.py`). Priority, ownership and disposition logic is CRM-agnostic and
+stays as is. Details at the end of `docs/03-CRM-INTEGRATION.md`.
 
 ---
 
-## 6. Errores que ya cometimos — no los repitas
+## 5. Design decisions worth keeping
 
-| Síntoma | Causa real |
+You can change them, but understand why they are this way first.
+
+**The server decides, the client only renders.** Neither the web console nor the mobile
+app decides anything: they ask and display. That keeps behavior identical across
+devices and means a rule changes in exactly one place.
+
+**The lead's phone number never leaves the server.** The client receives
+`***-***-1234`. Reps dial by contact id, not by number. This is what stops someone
+from walking out with the database on their phone.
+
+**A lead that had a conversation is owned for life.** One real conversation is enough
+for that lead to belong to that rep: redials, callbacks and inbound calls always come
+back to the same person. Without this, reps fight over commissions. Later
+no-answers do not remove ownership.
+
+**No new call until the last one is dispositioned.** Otherwise you get orphan calls
+with no outcome and your metrics become useless.
+
+**One session per rep.** The last device in kicks the previous one out. Two sessions
+for the same agent compete for the same SIP phone and neither works properly.
+
+**No inbound calls while a lead is on screen.** Otherwise a call lands on the rep just
+as they were about to dial, and they lose the lead they had open.
+
+**Every cron job must self-heal in both directions.** Do not assume a previous command
+landed. Compare actual state against desired state and correct both ways: that is what
+lets the system recover on its own after any component restarts.
+
+---
+
+## 6. Mistakes we already made — do not repeat them
+
+| Symptom | Actual cause |
 |---|---|
-| La llamada muere en silencio, sin error | el número llevaba `+` o espacios |
-| El lead entregado "se pierde" | un error SQL abortó la transacción entera |
-| Suena un timbre y el audio se corta | en móvil, se contestó antes de que el sistema activara el audio |
-| El webphone dice "SIP Proxy no responde" | certificados TLS del proxy SIP mal configurados |
-| Un parche desaparece solo | se editó dentro del contenedor sin copia en el host |
-| Fechas con horas raras | se guardó en UTC y se mostró sin convertir a la zona del cliente |
-| Llamadas salientes que nadie hizo | puerto SIP abierto: alguien se registró como agente |
-| Las campañas se cierran solas | OMniLeads auto-finaliza campañas Preview al agotar contactos |
-| Dos vendedores llamando al mismo lead | falta el sticky de dueño |
-| El agente no recibe leads y nadie sabe por qué | quedó pausado por una pausa que nunca se levantó |
+| Call dies silently, no error | the number contained `+` or spaces |
+| Delivered lead "disappears" | an SQL error aborted the whole transaction |
+| One ring, then audio cuts out | on mobile, the call was answered before the OS activated the audio session |
+| Softphone reports "SIP Proxy not responding" | TLS certificates on the SIP proxy misconfigured |
+| A patch vanishes on its own | it was edited inside the container with no copy on the host |
+| Timestamps look wrong | stored in UTC and displayed without converting to the client's zone |
+| Outbound calls nobody placed | SIP port left open: someone registered as an agent |
+| Campaigns close by themselves | OMniLeads auto-finalizes Preview campaigns when contacts run out |
+| Two reps calling the same lead | lead ownership missing |
+| An agent gets no leads and nobody knows why | they were left paused by a pause that never lifted |
 
 ---
 
-## 7. Problemas conocidos del propio kit
+## 7. Known issues in the kit itself
 
-Antes de instalar, leé [`docs/09-PROBLEMAS-CONOCIDOS.md`](docs/09-PROBLEMAS-CONOCIDOS.md).
-Son cosas que sabemos que están imperfectas y que conviene decidir antes, no
-descubrir en producción. Ninguna impide que el sistema funcione.
+Before installing, read `docs/09-KNOWN-ISSUES.md`. These are things we know are
+imperfect and that you should decide about up front rather than discover in
+production. None of them prevent the system from working.
 
-Las tres que más te van a afectar:
-- Los nombres de contenedor están fijos en los scripts: verificá los tuyos con
-  `docker ps --format '{{.Names}}'` y reemplazalos antes de instalar.
-- La lista de disposiciones que cuentan como "contestó" está duplicada en dos
-  archivos. Si editás una, editá la otra.
-- Los números de línea de los parches no van a coincidir con tu versión de
-  OMniLeads: buscá por nombre de función, nunca por número de línea.
+The three most likely to bite you:
+- Container names are hardcoded in the scripts: check yours with
+  `docker ps --format '{{.Names}}'` and replace them before installing.
+- The list of dispositions that count as "answered" is duplicated across two files.
+  If you edit one, edit the other.
+- Line numbers in the patches will not match your OMniLeads version: search by
+  function name, never by line number.
 
 ---
 
-## 8. Antes de decir "listo"
+## 8. Before calling it done
 
-- [ ] Llamada real saliente con audio en los dos sentidos.
-- [ ] Llamada real entrante al vendedor correcto.
-- [ ] Un lead recorre el ciclo completo: CRM → dialer → llamada → disposición → CRM.
-- [ ] Reinicio del servidor: todo vuelve solo.
-- [ ] `grep -rn` buscando credenciales en el código: sin resultados.
-- [ ] Puertos internos cerrados (verificalo desde afuera, no desde el servidor).
-- [ ] Los crons corren y escriben en sus logs.
-- [ ] El cliente sabe qué mirar cuando algo falla.
+- [ ] Real outbound call with audio both ways.
+- [ ] Real inbound call to the correct rep.
+- [ ] A lead completes the full cycle: CRM to dialer to call to disposition to CRM.
+- [ ] Server reboot: everything comes back on its own.
+- [ ] `grep -rn` for credentials in the code: no results.
+- [ ] Internal ports closed (verify from outside the server, not from inside).
+- [ ] Cron jobs running and writing to their logs.
+- [ ] The client knows what to look at when something breaks.
 
-Si alguno no está, no está listo. Decilo en vez de entregarlo a medias.
+If any of these is missing, it is not done. Say so instead of handing it over half-finished.

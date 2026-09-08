@@ -68,7 +68,7 @@ docker exec prod-env-acd-1 asterisk -rx "dialplan reload"
 | **Preservar el identificador externo** | Mantiene el id del contacto en el CRM dentro de la tarjeta del lead, para poder abrirlo desde la consola. |
 | **Validar antes de finalizar** | Corre la validación de la disposición **antes** de cerrar la relación agente-contacto, no después. Si valida después, ya es tarde: el lead quedó cerrado con una disposición inválida. |
 
-### Enmascarado del número (varios archivos)
+### Number masking (several files)
 
 El vendedor nunca ve el teléfono completo del lead: ve `***-***-1234`. Hay que
 enmascarar en **cinco** lugares, y si te olvidás de uno el número se filtra por ahí:
@@ -85,14 +85,14 @@ enmascarar en **cinco** lugares, y si te olvidás de uno el número se filtra po
 | Parche | Archivo | Qué resuelve |
 |---|---|---|
 | **Solo dígitos al marcar** | `views_agente.py` | Un `+` o un espacio mata la llamada en silencio. Limpia el número pase lo que pase con el dato de origen. |
-| **Disposiciones en orden alfabético** | `forms_base.py` | De fábrica salen por identificador interno. Los vendedores las eligen por posición; que se muevan genera errores de calificación. |
+| **Dispositions in alphabetical order** | `forms_base.py` | Out of the box they come sorted by internal id. Reps pick them by position; if they move around, wrong dispositions get filed. |
 | **Dominio propio permitido** | `settings` | Sin esto, cualquier envío de formulario desde tu dominio devuelve error 403. |
 | **Duración del token de API** | `settings` | El token de API dura 9 horas de fábrica. Para webhooks que corren para siempre, se extiende a un año. |
 | **Botón unificado (interfaz)** | `campanasPreviewAgente.js` | La parte visual del botón único. Requiere los dos comandos de archivos estáticos de arriba. |
 | **Liberar lead en pausa** | `agent_activity.py` | Si el agente entra en pausa con un lead abierto, el lead se libera en vez de quedar bloqueado. |
 | **Cuatro procesos de aplicación** | `oml_uwsgi.ini` | De fábrica viene con uno solo: con varios agentes, una petición lenta bloquea a todos. |
 
-### En el plan de marcación (`patches_dialplan.txt`)
+### In the dialplan (`patches_dialplan.txt`)
 
 | Parche | Qué resuelve |
 |---|---|

@@ -1,4 +1,4 @@
-# Credenciales — nunca subir
+# Credentials - never commit
 .env
 .env_dialer
 *.env
@@ -9,13 +9,13 @@
 *.key
 *.pem
 
-# Datos de clientes
-numeros*.txt
+# Client data
+numbers*.txt
 leads*.json
 backfill*.json
 *.csv
 
-# Basura de sistema
+# System noise
 __pycache__/
 *.pyc
 .DS_Store

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Motor disposiciones -> GHL, Dialer (2026-08-22). SIN Make.
-Al guardar una disposicion: tags + nota + ciclo de owner (asignar vendedor si contesto /
-desasignar si no contesto). Archivo: api_app/views/crm_dispositions.py
-Se activa importandolo desde urls.py (signal post_save de CalificacionCliente).
+Disposition engine -> GHL, Dialer (2026-08-22). NO Make.
+When a disposition is saved: tags + note + owner cycle (assign salesperson if answered /
+unassign if not answered). File: api_app/views/crm_dispositions.py
+Activated by importing it from urls.py (post_save signal of CalificacionCliente).
 """
 import logging
 import threading
@@ -22,7 +22,7 @@ GHL_BASE = "https://services.leadconnectorhq.com"
 GHL_VERSION = "2021-07-28"
 ENV_PATH = "/opt/omnileads/.env_dialer"
 
-# tags por disposicion (esquema Colombia adaptado)
+# tags per disposition (adapted Colombia schema)
 TAG_ADD = {
     "Agendo cita":                  ["cita-agendada-dialer"],
     "Va a agendar":                 ["va-a-agendar"],
@@ -32,11 +32,11 @@ TAG_ADD = {
     "Ya compro":                    ["dq-ya-compro"],
     "Numero equivocado":            ["numero-malo"],
 }
-# "llamar-mas-tarde" se quita en TODA disposicion excepto cuando se esta poniendo
+# "llamar-mas-tarde" is removed on EVERY disposition except when it's being set
 QUITA_LLAMAR_MAS_TARDE_EXCEPTO = {"Llamada de vuelta programada"}
 QUITA_VA_A_AGENDAR_EXCEPTO = {"Va a agendar"}
 
-# ciclo de asignacion (regla de negocio: owner permanente SOLO tras contestacion)
+# assignment cycle (business rule: permanent owner ONLY after being answered)
 CONTESTO = {"Agendo cita", "Va a agendar", "Llamada de vuelta programada", "Prefiere WhatsApp",
             "Solo queria precio", "No interesado", "Ya compro", "Colgo",
             "Error mio de ventas"}
@@ -51,9 +51,9 @@ def _env():
                 k, v = line.strip().split("=", 1)
                 cfg[k] = v
     except Exception as e:
-        logger.error("dispo: no pude leer %s: %s", ENV_PATH, e)
-    # Alias: quien prefiera nombres neutrales puede escribir CRM_API_TOKEN en vez
-    # de GHL_API_TOKEN. Se acepta cualquiera de los dos; gana el que este puesto.
+        logger.error("dispo: could not read %s: %s", ENV_PATH, e)
+    # Alias: whoever prefers neutral names can write CRM_API_TOKEN instead
+    # of GHL_API_TOKEN. Either one is accepted; whichever is set wins.
     for clave in list(cfg):
         if clave.startswith("CRM_"):
             cfg.setdefault("GHL_" + clave[4:], cfg[clave])
@@ -61,7 +61,7 @@ def _env():
 
 
 def _ghl_vendedor_de_agente(agente_id):
-    """Mapeo login dialer (BDC o vendedor) -> user GHL del VENDEDOR dueno."""
+    """Mapping of the dialer login (BDC or salesperson) -> GHL user of the owning SALESPERSON."""
     with connection.cursor() as cur:
         cur.execute("SELECT ghl_user_id FROM dialer_agent_crm_map WHERE agente_id=%s", [agente_id])
         row = cur.fetchone()
@@ -83,7 +83,7 @@ def _procesar(cal_id):
     cfg = _env()
     token, loc = cfg.get("GHL_API_TOKEN"), cfg.get("GHL_LOCATION_ID")
     if not token:
-        logger.error("dispo: sin GHL_API_TOKEN")
+        logger.error("dispo: missing GHL_API_TOKEN")
         return
     H = {"Authorization": "Bearer %s" % token, "Version": GHL_VERSION,
          "Content-Type": "application/json"}
@@ -104,7 +104,7 @@ def _procesar(cal_id):
     quitar = []
     if dispo not in QUITA_LLAMAR_MAS_TARDE_EXCEPTO:
         quitar.append("llamar-mas-tarde")
-        # tags de callback que pone el workflow del calendario en GHL
+        # callback tags set by the GHL calendar workflow
         quitar.extend(["callback", "requested callback"])
     if dispo not in QUITA_VA_A_AGENDAR_EXCEPTO:
         quitar.append("va-a-agendar")
@@ -113,14 +113,14 @@ def _procesar(cal_id):
             "%s/contacts/%s/tags" % (GHL_BASE, ghl_id), headers=H,
             json={"tags": quitar}, timeout=15))
 
-    # 2) nota simple SOLO para dispos sin conversacion (el resto lo cubre Whisper)
+    # 2) simple note ONLY for dispositions without conversation (Whisper covers the rest)
     if dispo in ("No contesto", "Numero equivocado"):
         _try("nota", lambda: requests.post(
         "%s/contacts/%s/notes" % (GHL_BASE, ghl_id), headers=H,
         json={"body": u"\U0001F4DE %s — %s" % (dispo, agente_nombre)}, timeout=15))
 
-    # 3) ciclo de owner. STICKY DE POR VIDA: si el lead ya tiene dueno, el owner GHL
-    # es el dueno y un "No contesto" posterior NO lo desasigna (regla decisión de producto).
+    # 3) owner cycle. LIFETIME STICKY: if the lead already has an owner, the GHL owner
+    # is the owner and a later "No contesto" does NOT unassign it (product decision rule).
     _owner = lead_ownership.get_owner(cal.contacto_id)
     if dispo in CONTESTO:
         vendedor = _ghl_vendedor_de_agente(_owner if _owner > 0 else cal.agente_id)
@@ -129,7 +129,7 @@ def _procesar(cal_id):
                 "%s/contacts/%s" % (GHL_BASE, ghl_id), headers=H,
                 json={"assignedTo": vendedor}, timeout=15))
         else:
-            logger.warning("dispo: agente %s sin mapeo GHL (dialer_agent_crm_map)", cal.agente_id)
+            logger.warning("dispo: agente %s has no GHL mapping (dialer_agent_crm_map)", cal.agente_id)
     elif dispo in NO_CONTESTO and _owner <= 0:
         _try("owner=null", lambda: requests.put(
             "%s/contacts/%s" % (GHL_BASE, ghl_id), headers=H,
@@ -138,7 +138,7 @@ def _procesar(cal_id):
 
 @receiver(post_save, sender=CalificacionCliente, dispatch_uid="dispo_crm")
 def on_calificacion_saved(sender, instance, **kwargs):
-    # STICKY DE POR VIDA: la primera disposicion de conversacion fija el dueno (sincrono)
+    # LIFETIME STICKY: the first conversation disposition sets the owner (synchronous)
     try:
         _nombre = instance.opcion_calificacion.nombre
         if _nombre in lead_ownership.DISPOS_CONVERSACION and instance.agente_id > 0:
@@ -148,11 +148,11 @@ def on_calificacion_saved(sender, instance, **kwargs):
     threading.Thread(target=_procesar, args=(instance.id,), daemon=True).start()
 
 
-# ── Asignación al OBTENER lead (decisión decisión de producto) ─────────────────
-# Cuando el agente da "Obtener contacto" (AEC pasa a ENTREGADO), se asigna el
-# lead en GHL al VENDEDOR mapeado del agente — así "Ir al CRM" siempre muestra
-# el lead. El ciclo de disposición luego lo mantiene (contestó) o lo
-# desasigna (no contestó).
+# ── Assignment when GETTING a lead (product decision) ─────────────────
+# When the agent does "Obtener contacto" (AEC moves to ENTREGADO), the lead
+# is assigned in GHL to the agent's mapped SALESPERSON — so "Ir al CRM" always
+# shows the lead. The disposition cycle then keeps it (answered) or
+# unassigns it (did not answer).
 from ominicontacto_app.models import AgenteEnContacto, Contacto
 
 
@@ -183,8 +183,8 @@ def _asignar_on_entrega(aec_id):
 
 @receiver(post_save, sender=AgenteEnContacto, dispatch_uid="deliver_owner")
 def on_aec_saved(sender, instance, **kwargs):
-    # STICKY DE POR VIDA: si OML devuelve al pool (agente -1) un lead con dueno, se lo
-    # regresa al dueno de inmediato (liberar_contacto, logout, etc.)
+    # LIFETIME STICKY: if OML returns a lead with an owner to the pool (agente -1), it's
+    # returned to the owner right away (liberar_contacto, logout, etc.)
     if instance.estado == AgenteEnContacto.ESTADO_INICIAL and instance.agente_id == -1:
         try:
             _o = lead_ownership.get_owner(instance.contacto_id)
@@ -195,7 +195,7 @@ def on_aec_saved(sender, instance, **kwargs):
     if instance.estado == AgenteEnContacto.ESTADO_ENTREGADO:
         threading.Thread(target=_asignar_on_entrega, args=(instance.id,), daemon=True).start()
 
-    # Lead en pantalla -> el vendedor no recibe entrantes; al finalizarlo vuelve a recibir.
+    # Lead on screen -> the salesperson does not receive inbound calls; once finished, they receive them again.
     _ag = instance.agente_id or -1
     if _ag > 0 and instance.estado in (AgenteEnContacto.ESTADO_ENTREGADO,
                                        AgenteEnContacto.ESTADO_ASIGNADO):
@@ -208,27 +208,27 @@ def on_aec_saved(sender, instance, **kwargs):
 
 
 
-# ── PATCH GATE (decisión de producto): anti-fraude "Prefiere WhatsApp sin llamar" ──────────
-# Una disposicion de CONVERSACION solo se acepta si en esta entrega hubo una llamada CONTESTADA
-# (evento ANSWER en LlamadaLog para ese agente+contacto, o para el callid de la calificacion).
-# Sin contestacion (no contesto, buzon, ni siquiera marco) solo se aceptan No contesto / Numero
-# equivocado. Se aplica a las campanas Preview 1-5. El formulario tambien filtra las opciones
-# (vista call_outcome), pero esta es la barrera real (server-side).
+# ── GATE PATCH (product decision): anti-fraud "Prefiere WhatsApp without calling" ──────────
+# A CONVERSATION disposition is only accepted if this delivery had an ANSWERED call
+# (ANSWER event in LlamadaLog for that agent+contact, or for the calificacion's callid).
+# Without an answer (didn't answer, voicemail, didn't even dial) only No contesto / Numero
+# equivocado are accepted. Applies to Preview campanas 1-5. The form also filters the options
+# (call_outcome view), but this is the real barrier (server-side).
 from datetime import timedelta
 from django.core.exceptions import ValidationError
 from django.utils import timezone as _tz
 from reportes_app.models import LlamadaLog
 
-GATE_ACTIVO = False   # decisión de producto: disposiciones libres (sin exigir llamada contestada)
+GATE_ACTIVO = False   # product decision: free dispositions (not requiring an answered call)
 GATE_CAMPANAS = {1, 2, 3, 4, 5}
 DISPOS_SIN_CONTESTAR = {"No contesto", "Numero equivocado"}
 GATE_VENTANA = timedelta(hours=3)
-GATE_MSG = ("Esta llamada NO fue contestada: solo puedes guardar 'No contesto' o 'Numero equivocado'. "
-            "Si el lead si contesto, revisa que la llamada haya conectado y vuelve a intentar.")
+GATE_MSG = ("This call was NOT answered: you can only save 'No contesto' or 'Numero equivocado'. "
+            "If the lead did answer, check that the call actually connected and try again.")
 
 
 def llamada_contestada(agente_id, contacto_id, callid=None, desde=None):
-    """True si hubo ANSWER de ese agente a ese contacto en la ventana (o para ese callid)."""
+    """True if there was an ANSWER from that agent to that contact in the window (or for that callid)."""
     try:
         if callid:
             if LlamadaLog.objects.filter(callid=callid, event="ANSWER").exists():
@@ -238,11 +238,11 @@ def llamada_contestada(agente_id, contacto_id, callid=None, desde=None):
             agente_id=agente_id, contacto_id=contacto_id, event="ANSWER", time__gte=desde).exists()
     except Exception as e:
         logger.error("DIALER gate llamada_contestada: %s", e)
-        return True   # ante error del log, no bloquear al agente
+        return True   # on a log error, don't block the agent
 
 
 def resumen_llamadas(agente_id, contacto_id, desde=None):
-    """Para el formulario: {answered, attempts, last_event, last_duration}."""
+    """For the form: {answered, attempts, last_event, last_duration}."""
     if not GATE_ACTIVO:
         return {"answered": True, "attempts": 0, "last_event": None, "last_duration": None, "gate": "off"}
     desde = desde or (_tz.now() - GATE_VENTANA)
@@ -257,10 +257,10 @@ def resumen_llamadas(agente_id, contacto_id, desde=None):
 
 
 def validar_gate(instance):
-    """Lanza ValidationError si es una disposicion de conversacion sin llamada contestada.
-    La llama CalificacionCliente.save() ANTES de que OML finalice el AEC (si no, un rechazo
-    igual sacaba el lead de la cola), y tambien la senal pre_save como segunda barrera.
-    DESACTIVADO con GATE_ACTIVO=False (decisión de producto)."""
+    """Raises ValidationError if it's a conversation disposition without an answered call.
+    Called by CalificacionCliente.save() BEFORE OML finalizes the AEC (otherwise a rejection
+    would still pull the lead out of the queue anyway), and also the pre_save signal as a second barrier.
+    DISABLED with GATE_ACTIVO=False (product decision)."""
     if not GATE_ACTIVO:
         return
     try:
@@ -274,11 +274,11 @@ def validar_gate(instance):
         try:
             prev = CalificacionCliente.objects.only("opcion_calificacion_id").get(pk=instance.pk)
             if prev.opcion_calificacion_id == instance.opcion_calificacion_id:
-                return   # no cambia la disposicion (ej. observaciones): no re-validar
+                return   # disposition unchanged (e.g. observaciones): don't re-validate
         except CalificacionCliente.DoesNotExist:
             pass
     if not llamada_contestada(instance.agente_id, instance.contacto_id, instance.callid):
-        logger.warning("DIALER gate: BLOQUEADA dispo '%s' agente=%s contacto=%s (sin ANSWER)",
+        logger.warning("DIALER gate: BLOCKED dispo '%s' agente=%s contacto=%s (no ANSWER)",
                        nombre, instance.agente_id, instance.contacto_id)
         raise ValidationError(GATE_MSG)
 
@@ -288,12 +288,12 @@ def on_calificacion_pre_save(sender, instance, **kwargs):
     validar_gate(instance)
 
 
-# ── LEAD EN PANTALLA = NO RECIBE ENTRANTES (decisión decisión de producto) ────────
-# Mientras el vendedor tiene un lead entregado/asignado sin disposicionar, no le
-# timbran las llamadas de las colas. Se pausa SOLO en Asterisk (QueuePause): no se
-# toca el estado de OML ni se libera el lead (pause_agent de OML sí lo liberaría).
-# Aplica igual en la consola web y en la app del celular.
-# Seguro: /root/sync_agent_pause.sh despausa cada minuto a quien ya no tenga lead.
+# ── LEAD ON SCREEN = DOES NOT RECEIVE INBOUND (product decision) ────────
+# While the salesperson has a delivered/assigned lead without a disposition, queue
+# calls don't ring for them. Paused ONLY in Asterisk (QueuePause): OML's state is
+# not touched and the lead is not released (OML's pause_agent would release it).
+# Applies the same in the web console and in the mobile app.
+# Safety net: /root/sync_agent_pause.sh unpauses every minute whoever no longer has a lead.
 PAUSA_GESTION_ACTIVA = True
 _REDIS_PAUSA_KEY = 'OML:DIALER:PAUSA_GESTION'
 
@@ -319,7 +319,7 @@ def marcar_pausa_gestion(agente_id, pausado):
 
 
 def pausa_gestion(agente_id, pausar):
-    """Pausa/despausa al agente en sus colas de Asterisk por tener un lead en pantalla."""
+    """Pauses/unpauses the agent in their Asterisk queues for having a lead on screen."""
     if not PAUSA_GESTION_ACTIVA:
         return
     try:
@@ -336,7 +336,7 @@ def pausa_gestion(agente_id, pausar):
             manager.disconnect_manager()
         marcar_pausa_gestion(agente_id, pausar)
         logger.info("DIALER pausa gestion: agente=%s %s", agente_id,
-                    'pausado (lead en pantalla)' if pausar else 'disponible')
+                    'paused (lead on screen)' if pausar else 'available')
     except Exception as e:
         logger.error("DIALER pausa gestion agente=%s pausar=%s: %s", agente_id, pausar, e)
 
@@ -350,8 +350,8 @@ def _tiene_lead_en_pantalla(agente_id):
 
 
 def revisar_pausas_gestion():
-    """Seguro anti-agente-colgado: despausa a todo el que esté marcado y ya no
-    tenga lead en pantalla. Lo corre /root/sync_agent_pause.sh cada minuto."""
+    """Anti-stuck-agent safety net: unpauses everyone who's marked and no longer
+    has a lead on screen. Run by /root/sync_agent_pause.sh every minute."""
     liberados = []
     try:
         r = _redis_ale()

@@ -1,7 +1,7 @@
 #!/bin/bash
-# INBOUND STICKY POR VENDEDOR — crea/asegura la campaña entrante personal de CADA agente activo
-# (idempotente). Correr después de crear agentes nuevos. Hace: campañas+rutas en DB (ORM),
-# Redis (OML:CAMP / OML:INR / OML:CAMPAIGN-AGENTS), bloques en queues.conf y reload.
+# PER-REP INBOUND STICKY - creates/ensures the personal inbound campaign for EVERY active agent
+# (idempotent). Run it after creating new agents. It does: campaigns+routes in the DB (ORM),
+# Redis (OML:CAMP / OML:INR / OML:CAMPAIGN-AGENTS), blocks in queues.conf and a reload.
 set -e
 CFG=/opt/dialer-kit/patches
 DJ=prod-env-django-app-1
@@ -19,4 +19,4 @@ open(p, "w").write(s); print("queues.conf +%d" % n)
 PY
 cat $CFG/queues.conf | docker exec -i prod-env-acd-1 tee /etc/asterisk/oml_queues_override.conf > /dev/null
 docker exec prod-env-acd-1 asterisk -rx "queue reload all" > /dev/null
-echo "campañas inbound personales: $(python3 -c "import json;print(len(json.load(open('/root/agent_inbound.json'))))") | colas cargadas: $(docker exec prod-env-acd-1 asterisk -rx 'queue show' | grep -c '_Inbound A' || true)"
+echo "personal inbound campaigns: $(python3 -c "import json;print(len(json.load(open('/root/agent_inbound.json'))))") | queues loaded: $(docker exec prod-env-acd-1 asterisk -rx 'queue show' | grep -c '_Inbound A' || true)"

@@ -6,8 +6,8 @@
 1500-        preview
 1501-        """
 1502-        try:
-1503:            # PATCH (portado de otro cliente 2026-09-03): con re-inyecciones hay varios AEC por
-1504-            # contacto+campana; tomar el activo mas reciente, si no el ultimo FINALIZADO.
+1503:            # PATCH (ported from another client 2026-09-03): with re-injections there are several AEC per
+1504-            # contact+campaign; take the most recent active one, if none, the last FINALIZADO.
 1505-            agente_en_contacto = AgenteEnContacto.objects.filter(
 1506-                contacto_id=calificacion_cliente.contacto_id,
 1507-                campana_id=self.pk,
@@ -22,7 +22,7 @@
 1516-        except AgenteEnContacto.DoesNotExist:
 1517-            if self.estado == self.ESTADO_FINALIZADA:
 1518-                return
-1519-            # Si la campaña no finalizó No puede quedar calificacion sin AgenteEnContacto
+1519-            # If the campaign did not finish, there cannot be a disposition without AgenteEnContacto
 1520-            self.adicionar_agente_en_contacto(
 1521-                calificacion_cliente.contacto, calificacion_cliente.agente.id,
 1522-                es_originario=calificacion_cliente.contacto.es_originario)
@@ -31,8 +31,8 @@
 1525-            agente_en_contacto.estado = AgenteEnContacto.ESTADO_FINALIZADO
 1526-            agente_en_contacto.save()
 1527-        else:
-1528-            # Si el contacto ya esta FINALIZADO, no hace falta actualizar.
-1529-            # para el caso cuando se llama al procedimiento luego de añadir un
+1528-            # If the contact is already FINALIZADO, no need to update.
+1529-            # for the case when the procedure is called after adding a
 --
 1532-                return
 1533-            agente_en_contacto.estado = AgenteEnContacto.ESTADO_FINALIZADO
@@ -40,13 +40,13 @@
 1535-            self.gestionar_finalizacion_por_contactos_calificados()
 1536-
 1537-    def gestionar_finalizacion_por_contactos_calificados(self):
-1538:        # PATCH: no auto-finalizar campanas Preview al agotar contactos (decisión de producto).
-1539-        # La campana queda activa esperando nuevos leads del webhook GHL.
+1538:        # PATCH: do not auto-finish Preview campaigns when contacts run out (product decision).
+1539-        # The campaign stays active waiting for new leads from the GHL webhook.
 1540-        return
-1541-        # si todos los contactos de la campaña han sido calificados
-1542-        # o sea, tienen el valor 'estado' igual a FINALIZADO se eliminan todas
-1543-        # las entradas correspondientes a la campaña en el modelo AgenteEnContacto
-1544-        # y se marca la campaña como finalizada
+1541-        # if all the campaign's contacts have been dispositioned
+1542-        # that is, have the 'estado' value equal to FINALIZADO, all entries are deleted
+1543-        # corresponding to the campaign in the AgenteEnContacto model
+1544-        # and the campaign is marked as finished
 1545-        contactos_campana = AgenteEnContacto.objects.filter(campana_id=self.pk)
 1546-        n_contactos_campana = contactos_campana.count()
 1547-        n_contactos_atendidos = contactos_campana.filter(
@@ -74,23 +74,23 @@
 3036-
 3037-    def save(self, *args, **kwargs):
 3038-        self._validar_unicidad_calificacion()
-3039:        # PATCH GATE (2026-09-03): validar la disposicion ANTES de finalizar la relacion
-3040-        # agente-contacto; si se rechaza, el lead sigue en pantalla del agente.
+3039:        # PATCH GATE (2026-09-03): validate the disposition BEFORE finishing the relationship
+3040-        # agent-contact; if rejected, the lead stays on the agent's screen.
 3041-        try:
 3042-            from api_app.views.crm_dispositions import validar_gate as _kit_validar_gate
 3043-        except Exception:
 3044-            _kit_validar_gate = None
 3045-        if _kit_validar_gate is not None:
 3046-            _kit_validar_gate(self)
-3047-        # Finalizar relacion de contacto con agente
-3048-        # Optimizacion: si ya hay calificacion ya se termino la relacion agente contacto antes.
+3047-        # Finish contact-agent relationship
+3048-        # Optimization: if there is already a disposition, the agent-contact relationship was already finished before.
 3049-        campana = self.opcion_calificacion.campana
 3050-        contacto = self.contacto
 3051-        if campana.type == Campana.TYPE_PREVIEW:
 3052-            campana.gestionar_finalizacion_relacion_agente_contacto(self)
-3053-        # gestionamos las agendas
+3053-        # we manage the appointments
 3054-        if self.opcion_calificacion.tipo != OpcionCalificacion.AGENDA:
-3055-            # eliminamos las agendas existentes (si hubiera alguna)
+3055-            # we remove existing appointments (if any)
 3056-            AgendaContacto.objects.filter(
 3057-                agente=self.agente, contacto=contacto,
 3058-                campana=campana,
@@ -108,8 +108,8 @@
 3785-
 3786-    @classmethod
 3787-    def entregar_contacto(cls, agente, campana_id):
-3788:        # PATCH BOTON UNIFICADO (2026-08-22): cualquier boton entrega el lead de
-3789-        # mayor prioridad global entre TODAS las campanas Preview activas del agente.
+3788:        # PATCH UNIFIED BUTTON (2026-08-22): any button delivers the lead with
+3789-        # highest global priority among ALL of the agent's active Preview campaigns.
 3790-        try:
 3791-            from django.db import connection as _kit_conn
 3792-            with _kit_conn.cursor() as _cur:
@@ -142,7 +142,7 @@
 3826-            datos_contacto = literal_eval(data['datos_contacto'])
 3827-            data['datos_contacto'] = \
 3828-                {x: datos_contacto[x] for x in datos_contacto if x not in campos_ocultos}
-3829:            # PATCH GHL_ID: preservar id_externo en la tarjeta (boton Ir al CRM)
+3829:            # PATCH GHL_ID: preserve id_externo on the card (Go to CRM button)
 3830-            try:
 3831-                _ce = Contacto.objects.filter(id=data.get('contacto_id')).values_list('id_externo', flat=True).first()
 3832-                if _ce and 'GHL_ID' not in data['datos_contacto']:
@@ -153,15 +153,15 @@
 3837-            data['code'] = 'contacto-asignado'
 3838-            return data
 3839-
-3840-        # Si no tiene un contacto asignado, asignarle otro
+3840-        # If it doesn't have an assigned contact, assign another one
 3841-
-3842-        # Si el agente tiene algún contacto entregado previamente se libera para
-3843-        # que pueda ser entregado a otros agentes de la campaña
+3842-        # If the agent has any previously delivered contact, it is released so
+3843-        # it can be delivered to other agents of the campaign
 3844-        __, orden = cls.liberar_contacto(agente.id, campana_id)
 3845-
-3846-        # obtiene el orden de la ultimo asignacion entregada al agente
-3847-        # (-1 si no tenía ninguno asignado y le asigna consecutivamente
-3848-        # a partir los numeros de orden superiores o iguales a este
+3846-        # gets the order of the last assignment delivered to the agent
+3847-        # (-1 if it had none assigned) and assigns consecutively to it
+3848-        # from the order numbers greater than or equal to this one
 3849-        numero_agentes_contacto = AgenteEnContacto.objects.filter(campana_id=campana_id).count()
 3850-        orden = (orden + 1) % (numero_agentes_contacto + 1)
 3851-        try:
@@ -169,10 +169,10 @@
 3853-                campana_id=campana_id).filter(
 3854-                    agente_id__in=[-1, agente.pk], estado=AgenteEnContacto.ESTADO_INICIAL)
 3855-
-3856-            # encuentra y devuelve el contacto a asignar al
-3857-            # de acuerdo al orden definido en el atributo 'orden'
-3858-            # desde la lista de los contactos disponibles para el agente
-3859:            # PATCH PRIORIDAD PURA (como otro cliente)
+3856-            # finds and returns the contact to assign to the
+3857-            # agent according to the order defined in the 'orden' attribute
+3858-            # from the list of contacts available for the agent
+3859:            # PATCH PURE PRIORITY (like another client)
 3860-            qs_agentes_contactos = qs_agentes_contactos_no_orden \
 3861-                .order_by('orden', 'id') \
 3862-                .select_for_update(skip_locked=True) \
@@ -197,7 +197,7 @@
 3881-            datos_contacto = literal_eval(data['datos_contacto'])
 3882-            data['datos_contacto'] = \
 3883-                {x: datos_contacto[x] for x in datos_contacto if x not in campos_ocultos}
-3884:            # PATCH GHL_ID: preservar id_externo en la tarjeta (boton Ir al CRM)
+3884:            # PATCH GHL_ID: preserve id_externo on the card (Go to CRM button)
 3885-            try:
 3886-                _ce = Contacto.objects.filter(id=data.get('contacto_id')).values_list('id_externo', flat=True).first()
 3887-                if _ce and 'GHL_ID' not in data['datos_contacto']:
@@ -232,8 +232,8 @@
 507-           calificacion_pendiente_agente.get('TELEFONO', '') == data_entrega.get(
 508-               'telefono_contacto', False):
 509-            data_entrega['calldata'] = calificacion_pendiente_agente['CALLDATA']
-510:        # PATCH MASCARA (decisión de producto): el agente solo ve los ultimos 4 digitos del
-511-        # telefono en la tarjeta; la llamada sale por pk_contacto (el numero real queda en el server).
+510:        # PATCH MASK (product decision): the agent only sees the last 4 digits of the
+511-        # phone number on the card; the call goes out via pk_contacto (the real number stays on the server).
 512-        try:
 513-            _t = str(data_entrega.get('telefono_contacto') or '')
 514-            if len(_t) >= 4:
@@ -261,21 +261,21 @@
 536-        datos_contacto = {}
 
 ########## FILE: views_agente.py.patched
-192-        # TODO: DEJAR DE MANDAR pk_agente
-193-        # TODO: DEJAR DE MANDAR tipo_campana
+192-        # TODO: STOP SENDING pk_agente
+193-        # TODO: STOP SENDING tipo_campana
 194-        agente = self.request.user.get_agente_profile()
 195-        click2call_type = request.POST.get('click2call_type', 'false')
 196-        campana_id = request.POST.get('pk_campana')
 197-        telefono = request.POST.get('telefono', '')
-198:        # PATCH MASCARA (2026-09-03): si llega enmascarado (***-***-1234), se usa el real del contacto
+198:        # PATCH MASK (2026-09-03): if it arrives masked (***-***-1234), the contact's real number is used
 199-        if isinstance(telefono, str) and telefono.startswith('***'):
 200-            telefono = ''
 201-
-202-        # Patch: Para deectar que hubo un error cuando se le pega por AJAX...
+202-        # Patch: To detect that there was an error when hit via AJAX...
 203-        self.no_redirect = request.POST.get('404_on_error')
 204-
-205-        # Si el pk es 0 es porque no se quiere identificar al contacto.
-206-        # El tipo de click2call no será "preview".
+205-        # If the pk is 0, it's because the contact should not be identified.
+206-        # The click2call type will not be "preview".
 207-        contacto_id = request.POST['pk_contacto']
 208-        if not contacto_id == '-1':
 209-            try:
@@ -301,8 +301,8 @@
 247-                                ' Asegurese de no haber perdido la reserva')
 248-                    return self.error_return_value('campana_preview_activas_miembro', message)
 249-
-250:        # PATCH DIGITOS (2026-09-05): la central solo marca digitos; un "+" o un espacio
-251-        # hacia morir la llamada sin aviso. Se limpia aqui pase lo que pase con el dato.
+250:        # PATCH DIGITS (2026-09-05): the PBX only dials digits; a "+" or a space
+251-        # would kill the call without warning. It is cleaned here no matter what happens with the data.
 252-        import re as _re
 253-        telefono = _re.sub(r'\D', '', str(telefono or ''))
 254-        if len(telefono) == 11 and telefono.startswith('1'):
@@ -336,9 +336,9 @@
 157-            telefono = self.call_data['telefono']
 158-            if self.call_data['id_contacto']:
 159-                id_contacto = self.call_data['id_contacto']
-160:            # PATCH MASCARA WEBPHONE (2026-09-03): el webphone entrega el telefono enmascarado
-161-            # (XXXXXX1234 / ***-***-1234); sin esto la vista lo tomaba como "numero privado" y
-162-            # descartaba el contacto (formulario en blanco, sin nombre ni boton de llamar).
+160:            # PATCH MASK WEBPHONE (2026-09-03): the webphone delivers the masked phone number
+161-            # (XXXXXX1234 / ***-***-1234); without this the view took it as "private number" and
+162-            # discarded the contact (blank form, no name or call button).
 163-            if isinstance(telefono, str) and (telefono.startswith('XXXXXX') or telefono.startswith('***')):
 164-                _c = None
 165-                if id_contacto and str(id_contacto) != '-1':
@@ -349,9 +349,9 @@
 170-            if id_contacto is None or id_contacto == '-1':
 171-                callid = self.call_data['call_id']
 172-                call_contact_cache = CallContactCache()
-173-                # Busco si la llamada ya está asociada a un contacto
+173-                # Check if the call is already associated with a contact
 174-                id_contacto = call_contact_cache.get_call_contact_id(callid)
-175-                # Me aseguro que si hay contacto, exista en la base de datos de esta campaña
+175-                # Make sure that if there is a contact, it exists in this campaign's database
 176-                if id_contacto:
 177-                    if not self.campana.bd_contacto.contactos.filter(id=id_contacto).exists():
 178-                        id_contacto = None
@@ -370,8 +370,8 @@
 454-            configuracion_sitio_externo=json.dumps(self.configuracion_sitio_externo)))
 455-
 456-    def post(self, request, *args, **kwargs):
-457:        # PATCH MASCARA (2026-09-03): el formulario muestra el telefono como ***-***-1234;
-458-        # aqui se restaura el numero real del contacto antes de validar/guardar.
+457:        # PATCH MASK (2026-09-03): the form shows the phone number as ***-***-1234;
+458-        # here the contact's real number is restored before validating/saving.
 459-        try:
 460-            if getattr(self, 'contacto', None) is not None:
 461-                _p = request.POST.copy(); _chg = False
@@ -405,7 +405,7 @@
 1215-                self.fields['subcalificacion'] = forms.ChoiceField(
 1216-                    choices=choices, required=False,
 1217-                    widget=forms.Select(attrs={'class': 'form-control'}))
-1218:        # PATCH ORDEN (decisión de producto): disposiciones en orden alfabetico
+1218:        # PATCH ORDER (product decision): dispositions in alphabetical order
 1219-        self.fields['opcion_calificacion'].queryset = campana.opciones_calificacion.filter(filtro).order_by('nombre')
 1220-        self.fields['nombre_subcalificaciones'].initial = json.dumps(
 1221-            list(campana.opciones_calificacion.values("id", "subcalificaciones"))
@@ -440,10 +440,10 @@
 194-EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", False) == "True"
 195-EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", False) == "True"
 196-
-197:# PATCH: dominio propio (sin esto todo POST via el dominio da 403)
+197:# PATCH: custom domain (without this every POST via the domain gives 403)
 198-CSRF_TRUSTED_ORIGINS = ["https://dialer.example.com", "https://stats.example.com"]
 199-
-200:# PATCH token: API token dura 1 anio (webhooks GHL; production.py pone 9h)
+200:# PATCH token: API token lasts 1 year (GHL webhooks; production.py sets 9h)
 201-TOKEN_EXPIRED_AFTER_SECONDS = 31536000
 
 ########## FILE: campanasPreviewAgente.js.patched
@@ -452,17 +452,17 @@
 67-            if (data['result'] != 'OK') {
 68-                informarError(data, idCampana);
 69-            }
-70-            else {                // se obtienen los datos del contacto
+70-            else {                // fetch the contact data
 71:                var campEfectiva = data['campana_id'] || idCampana; // PATCH boton unificado
 72-                $('#validar_contacto').show();
 73-                $panelContacto.attr('class', 'col-md-4 col-md-offset-1');
-74-                // actualizamos el teléfono del contacto
+74-                // update the contact's phone number
 75-                var contactoTelefono = data['telefono_contacto'];
 76-                $contactoTelefono.text(contactoTelefono);
 77-                $inputContacto.attr('value', data['contacto_id']);
 78-                $inputCampana.attr('value', campEfectiva);
 79-
-80-                // Limpiamos la información de algún contacto anterior
+80-                // Clear the information of any previous contact
 81-                $contactoOtrosDatos.html('');
 82-
 83-                if (data['code'] == 'contacto-asignado'){
@@ -487,8 +487,8 @@
 248-    }
 249-}
 250-
-251:// PATCH BOTON UNICO (2026-08-22): si el agente tiene varias campanas Preview,
-252-// se muestra UN solo boton — cualquiera entrega el mejor lead global (backend unificado).
+251:// PATCH SINGLE BUTTON (2026-08-22): if the agent has several Preview campaigns,
+252-// only ONE button is shown — either one delivers the best global lead (unified backend).
 253-$(function() {
 254-    function aleUnificarBotones() {
 255-        var $btns = $('.obtener-contacto');

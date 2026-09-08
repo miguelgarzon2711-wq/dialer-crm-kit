@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-Seguro del "lead en pantalla = no entran llamadas" (el cliente / el negocio).
+Safety net for "lead on screen = no incoming calls" (el cliente / el negocio).
 
-Cada minuto compara la realidad de Asterisk con la del dialer y corrige:
-  - tiene lead en pantalla y NO está pausado  -> lo pausa
-  - no tiene lead y quedó pausado por nosotros -> lo despausa
-  - no tiene lead, no está en llamada y lleva >3 min pausado -> lo despausa igual
-    (red de seguridad por si se perdió la marca de Redis, p.ej. tras un reinicio)
+Every minute it compares Asterisk's actual state with the dialer's and corrects it:
+  - has a lead on screen and is NOT paused  -> pauses them
+  - has no lead and was left paused by us -> unpauses them
+  - has no lead, is not on a call and has been paused for >3 min -> unpauses them anyway
+    (safety net in case the Redis flag was lost, e.g. after a restart)
 
-Se auto-repara en los dos sentidos: sirve tanto si se reinicia Django como si se
-reinicia Asterisk o Redis. No depende de que ninguna orden previa haya llegado.
+Self-heals in both directions: it works whether Django restarts or
+Asterisk or Redis restarts. It doesn't depend on any previous command having arrived.
 """
 import re
 import subprocess
 import sys
 from datetime import datetime
 
-DESPAUSE_SEGUNDOS = 180  # tolerancia antes de despausar sin marca (respeta el ACW de OMniLeads)
-APP_DORMIDA_SEGUNDOS = 180  # la app deja de latir 3 min (cerrada o dormida) -> fuera de las colas
+DESPAUSE_SEGUNDOS = 180  # tolerance before unpausing without a flag (respects OMniLeads' ACW)
+APP_DORMIDA_SEGUNDOS = 180  # the app stops sending heartbeats for 3 min (closed or asleep) -> out of the queues
 
 
 def sh(cmd, timeout=25):
@@ -29,7 +29,7 @@ def sh(cmd, timeout=25):
 
 
 def pausados_en_asterisk():
-    """{agente_id: segundos_pausado} leyendo el estado real de las colas."""
+    """{agente_id: seconds_paused} reading the queues' real state."""
     salida = sh(['docker', 'exec', 'prod-env-acd-1', 'asterisk', '-rx', 'queue show'])
     salida = re.sub(r'\x1b\[[0-9;]*m', '', salida)
     encontrados = {}
@@ -56,8 +56,8 @@ def agentes_con_lead():
 
 
 def agentes_en_llamada():
-    """No tocar a quien está hablando (su ACW es legítimo).
-    Una sola pasada por Redis: el costo NO crece con la cantidad de vendedores."""
+    """Don't touch whoever is on a call (their ACW is legitimate).
+    A single pass over Redis: the cost does NOT grow with the number of salespeople."""
     lua = ("local r={} for _,k in ipairs(redis.call('KEYS','OML:AGENT:*')) do "
            "local v=redis.call('HGET',k,'CONTACT_NUMBER') "
            "if v and v~='' then r[#r+1]=k end end return r")
@@ -74,14 +74,14 @@ def marcados_por_nosotros():
 
 
 def miembros_en_asterisk():
-    """Agentes que hoy están metidos en alguna cola (logueados en Asterisk)."""
+    """Agents who are currently in some queue (logged in on Asterisk)."""
     salida = sh(['docker', 'exec', 'prod-env-acd-1', 'asterisk', '-rx', 'queue show'])
     salida = re.sub(r'\x1b\[[0-9;]*m', '', salida)
     return {int(m.group(1)) for m in re.finditer(r'^\s+(\d+)_\S', salida, re.M)}
 
 
 def apps_dormidas(ahora, miembros, en_llamada):
-    """Celulares que dejaron de latir: (agente_id, segundos_sin_latir)."""
+    """Phones that stopped sending heartbeats: (agente_id, seconds_without_heartbeat)."""
     out = sh(['docker', 'exec', 'prod-env-redis-1', 'redis-cli', '--no-raw', 'KEYS', 'OML:DIALER:SESION:*'])
     dormidas = []
     for m in re.finditer(r'OML:DIALER:SESION:(\d+)', out):
@@ -98,8 +98,8 @@ def apps_dormidas(ahora, miembros, en_llamada):
 
 
 def dormir_apps(dormidas):
-    """Saca de las colas al agente (mismo logout de la consola) y lo marca 'app_dormida':
-    cuando la app vuelva a latir, se reengancha sola."""
+    """Takes the agent out of the queues (same logout as the console) and marks them 'app_dormida':
+    when the app starts sending heartbeats again, it reconnects on its own."""
     if not dormidas:
         return
     ids = ','.join(str(a) for a, _ in dormidas)
@@ -115,7 +115,7 @@ def dormir_apps(dormidas):
 
 
 def aplicar(cambios):
-    """cambios: lista de (agente_id, pausar_bool)."""
+    """cambios: list of (agente_id, pausar_bool)."""
     if not cambios:
         return
     lineas = ';'.join("d.pausa_gestion(%d, %s)" % (a, 'True' if p else 'False') for a, p in cambios)
@@ -132,25 +132,25 @@ def main():
 
     cambios, motivos = [], []
 
-    # 1) tiene lead y no está pausado -> pausar (cubre reinicios de Asterisk)
+    # 1) has a lead and is not paused -> pause (covers Asterisk restarts)
     for agente in sorted(con_lead - set(pausados)):
         cambios.append((agente, True))
-        motivos.append("agente %s: tiene lead en pantalla, se pausa" % agente)
+        motivos.append("agente %s: has a lead on screen, pausing" % agente)
 
-    # 2) no tiene lead y quedó pausado -> despausar
+    # 2) has no lead and was left paused -> unpause
     for agente, segundos in sorted(pausados.items()):
         if agente in con_lead or agente in en_llamada:
             continue
         if agente in marcados or segundos > DESPAUSE_SEGUNDOS:
             cambios.append((agente, False))
-            motivos.append("agente %s: sin lead y pausado hace %ss, se libera" % (agente, segundos))
+            motivos.append("agente %s: no lead and paused for %ss, releasing" % (agente, segundos))
 
-    # 3) la app del celular dejó de latir (cerrada o dormida) -> fuera de las colas
+    # 3) the mobile app stopped sending heartbeats (closed or suspended) -> out of the queues
     import time as _t
-    # (con lead en pantalla no se toca: eso lo resuelve auto_release_leads a los 10 min)
+    # (an agent with a lead on screen is left alone: auto_release_leads handles that at 10 min)
     dormidas = apps_dormidas(int(_t.time()), miembros_en_asterisk(), en_llamada | con_lead)
     for agente, seg in dormidas:
-        motivos.append("agente %s: la app no late hace %ss, sale de las colas (se reengancha al volver)" % (agente, seg))
+        motivos.append("agente %s: the app hasn't sent a heartbeat for %ss, leaving the queues (reconnects on return)" % (agente, seg))
 
     if cambios:
         aplicar(cambios)

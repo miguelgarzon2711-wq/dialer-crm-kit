@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-INBOUND STICKY POR VENDEDOR (decisión de producto). Crea, por cada agente activo, una campaña
-entrante "Inbound A<id> <user>" con ese único agente, clonando la campaña 7 (Inbound G1):
-Campana + opciones + parametrosCrm + supervisores + queue_table (wait 20s) + queue_member +
-DestinoEntrante + RutaEntrante con DID virtual 900001<id 2 dígitos>. Idempotente.
-Imprime JSON con [{agente_id, username, campana_id, queue, did, ruta_id}].
+STICKY INBOUND PER SALESPERSON (product decision). For each active agent, creates an
+inbound campaign "Inbound A<id> <user>" with that single agent, cloning campaign 7 (Inbound G1):
+Campana + options + parametrosCrm + supervisors + queue_table (wait 20s) + queue_member +
+DestinoEntrante + RutaEntrante with a virtual DID 900001<2-digit id>. Idempotent.
+Prints JSON with [{agente_id, username, campana_id, queue, did, ruta_id}].
 """
 import json
 from django.db import connection
@@ -24,14 +24,14 @@ for ag in AgenteProfile.objects.filter(borrado=False).select_related("user").ord
         c.pk = None; c.id = None
         c.nombre = nombre
         c.save()
-        # opciones de calificación (mismas que la 7, así el motor GHL y el sticky las reconocen)
+        # disposition options (same as the group campaign, so the CRM engine and ownership recognize them)
         for o in OpcionCalificacion.objects.filter(campana_id=7):
             o.pk = None; o.id = None; o.campana = c; o.save()
         for p in ParametrosCrm.objects.filter(campana_id=7):
             p.pk = None; p.id = None; p.campana = c; p.save()
     qname = "%d_%s" % (c.id, nombre)
     with connection.cursor() as cur:
-        # supervisores = los mismos de la 7 (columna detectada dinamicamente), idempotente
+        # supervisors = same as the group campaign (column detected dynamically), idempotent
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='ominicontacto_app_campana_supervisors'")
         scol = [r[0] for r in cur.fetchall() if r[0] not in ("id", "campana_id")][0]
         cur.execute("INSERT INTO ominicontacto_app_campana_supervisors (campana_id, %s) "
@@ -61,7 +61,7 @@ for ag in AgenteProfile.objects.filter(borrado=False).select_related("user").ord
         ruta = RutaEntrante.objects.create(nombre=nombre, telefono=did, prefijo_caller_id="", destino=dst, idioma_id=2)
     out.append({"agente_id": ag.id, "username": user, "campana_id": c.id, "queue": qname, "did": did, "ruta_id": ruta.id})
 
-# Redis: familias de campañas/agentes (OML:CAMP, OML:CAMPAIGN-AGENTS, ...)
+# Redis: campana/agent families (OML:CAMP, OML:CAMPAIGN-AGENTS, ...)
 try:
     from ominicontacto_app.services.asterisk.redis_database import RegenerarAsteriskFamilysOML
     RegenerarAsteriskFamilysOML().regenerar_asterisk()

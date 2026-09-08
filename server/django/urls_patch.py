@@ -1,19 +1,19 @@
 # ============================================================================
-#  Rutas que agrega este kit.
+#  Routes added by this kit.
 #
-#  Pegar este bloque AL FINAL de:
+#  Paste this block AT THE END of:
 #      /opt/omnileads/ominicontacto/api_app/urls.py
-#  dentro del contenedor de Django (después de la definición de `urlpatterns`).
+#  inside the Django container (after the `urlpatterns` definition).
 #
-#  Los import van con __import__ a propósito: si un módulo del kit tuviera un
-#  error, Django arranca igual y solo falla esa ruta, en vez de quedar la
-#  aplicación entera caída.
+#  The imports use __import__ on purpose: if a kit module had an
+#  error, Django still starts up and only that route fails, instead of the
+#  entire application going down.
 #
-#  Después de pegarlo:
-#      python3 -c "import ast; ast.parse(open('urls.py').read())"   # validar
+#  After pasting it:
+#      python3 -c "import ast; ast.parse(open('urls.py').read())"   # validate
 #      docker cp urls.py prod-env-django-app-1:/opt/omnileads/ominicontacto/api_app/urls.py
 #      docker restart prod-env-django-app-1
-#      curl -s -o /dev/null -w "%{http_code}\n" https://<TU_DOMINIO>/accounts/login/   # debe dar 200
+#      curl -s -o /dev/null -w "%{http_code}\n" https://<YOUR_DOMAIN>/accounts/login/   # should give 200
 # ============================================================================
 
 _M_CRM = 'api_app.views.crm_webhooks'
@@ -21,23 +21,23 @@ _M_APP = 'api_app.views.agent_api'
 
 
 def _v(modulo, clase):
-    """Importa una vista del kit sin romper Django si el módulo falla."""
+    """Imports a kit view without breaking Django if the module fails."""
     return __import__(modulo, fromlist=[clase]).__dict__[clase].as_view()
 
 
 urlpatterns += [
-    # ── Entrada de leads desde el CRM ───────────────────────────────────────
-    # El CRM llama a esta ruta cada vez que un lead debe entrar, salir o
-    # cambiar de prioridad en la cola de marcación.
+    # ── Lead entry from the CRM ───────────────────────────────────────
+    # The CRM calls this route every time a lead must enter, leave or
+    # change priority in the dialing queue.
     path('api/v1/crm/lead_action/', _v(_M_CRM, 'CRMLeadActionView'),
          name='crm_lead_action'),
 
-    # Llamada entrante que nadie contestó: el lead vuelve a la cola con
-    # prioridad alta (el cliente llamó, está esperando).
+    # Inbound call nobody answered: the lead goes back to the queue with
+    # high priority (the customer called, they're waiting).
     path('api/v1/dialer/missed_call/', _v(_M_CRM, 'CRMMissedCallView'),
          name='crm_missed_call'),
 
-    # ── Consultas de la consola del agente ──────────────────────────────────
+    # ── Agent console queries ──────────────────────────────────
     path('api/v1/contact_history/', _v(_M_CRM, 'ContactoHistorialView'),
          name='contact_history'),
     path('api/v1/agente/skip_lead/', _v(_M_CRM, 'SkipLeadView'),
@@ -47,9 +47,9 @@ urlpatterns += [
     path('api/v1/agente/call_outcome/', _v(_M_CRM, 'CRMCallOutcomeView'),
          name='call_outcome'),
 
-    # ── API REST para clientes móviles ──────────────────────────────────────
-    # Solo hace falta si vas a construir una aplicación propia para los
-    # vendedores. Si no, podés borrar este bloque entero.
+    # ── REST API for mobile clients ──────────────────────────────────────
+    # Only needed if you're going to build your own application for the
+    # salespeople. If not, you can delete this entire block.
     path('api/v1/app/session/', _v(_M_APP, 'AppSessionView'),
          name='app_session'),
     path('api/v1/app/asterisk_login/', _v(_M_APP, 'AppAsteriskLoginView'),
@@ -76,7 +76,7 @@ urlpatterns += [
          name='app_notas'),
 ]
 
-# Importar el motor de disposiciones registra sus señales de Django: es lo que
-# hace que al guardar una disposición se escriba automáticamente en el CRM.
-# Sin esta línea el resto funciona, pero nada vuelve al CRM.
+# Importing the disposition engine registers its Django signals: that's what
+# makes it so that saving a disposition automatically writes to the CRM.
+# Without this line the rest works, but nothing goes back to the CRM.
 from api_app.views import crm_dispositions  # noqa: E402,F401

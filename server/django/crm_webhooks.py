@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-GHL -> OMniLeads: inyeccion/remocion de leads Dialer (El Negocio).
-Archivo: /opt/omnileads/ominicontacto/api_app/views/crm_webhooks.py
-Adaptado del ghl_integration.py de otro cliente (2026-08-22). SIN Make, SIN depositos.
+GHL -> OMniLeads: lead injection/removal for the Dialer (El Negocio).
+File: /opt/omnileads/ominicontacto/api_app/views/crm_webhooks.py
+Adapted from another client's ghl_integration.py (2026-08-22). NO Make, NO deposits.
 """
 import json
 import logging
@@ -21,10 +21,10 @@ from ominicontacto_app.models import (
 from api_app.views import lead_ownership  # PATCH STICKY DE POR VIDA (2026-09-03)
 logger = logging.getLogger(__name__)
 
-DB_ID = 1  # BD "el negocio Produccion"
+DB_ID = 1  # id of the OMniLeads contact database holding these leads
 
-# Mapeo campana (parametro estable en las automatizaciones GHL) -> campana_id OML.
-# Si el cliente reorganiza los grupos, SOLO se cambia este dict — las URLs de GHL no se tocan.
+# Mapping of campana (stable parameter in GHL automations) -> OML campana_id.
+# If the client reorganizes the groups, ONLY this dict needs to change — GHL URLs stay untouched.
 CAMPANAS = {
     "grupo1": 1,
     "grupo2": 2,
@@ -33,15 +33,15 @@ CAMPANAS = {
     "v25":    5,
 }
 
-# Reparto automatico de leads SIN ad id (?campana=auto):
-# peso = nº de agentes del grupo; se asigna al grupo con MENOS cola pendiente por agente.
-# Solo Grupo 1 (18 agentes) y Mixto (Agente12+Agente13). G2/G3/V25 ya no se usan.
-AUTO_WEIGHTS = {1: 18, 4: 2}  # 2026-09-03: leads sin ad id se reparten entre Grupo 1 y Mixto (proporcional)
+# Automatic distribution of leads WITHOUT an ad id (?campana=auto):
+# weight = number of agents in the group; assigned to the group with LEAST pending queue per agent.
+# Only Grupo 1 (18 agents) and Mixto (Agente12+Agente13). G2/G3/V25 are no longer used.
+AUTO_WEIGHTS = {1: 18, 4: 2}  # 2026-09-03: leads without ad id are split between Grupo 1 and Mixto (proportional)
 
 
 def _resolver_auto(contacto):
-    """Grupo para un lead sin campana de origen. Coherencia: si ya estuvo en una
-    campana, repite. Si es nuevo: la campana con menor (pendientes/agentes)."""
+    """Group for a lead with no source campana. Consistency: if it was already in a
+    campana, repeat it. If new: the campana with the lowest (pending/agents) ratio."""
     if contacto:
         prev = AgenteEnContacto.objects.filter(
             contacto_id=contacto.id, campana_id__in=list(AUTO_WEIGHTS)
@@ -61,21 +61,21 @@ def _resolver_auto(contacto):
 
 
 TIPO_ORDEN = {
-    # Prioridades del dialer (decisión de producto): menor = se entrega primero
-    "Recordatorio Cita": 0,   # dia de la cita (manana + 1h antes) -> SOLO al vendedor dueno de la cita
-    "Llamada Perdida":   1,   # el lead llamo y nadie contesto
-    "WA Cita Pendiente": 2,   # ya hablo, quedo de confirmar hora y escribio por WA
-    "Callback":          3,   # "llamame a las 5"
-    "WA Respondio":      4,   # respondio por WA y no esta asignado
+    # Dialer priorities (product decision): lower = delivered first
+    "Recordatorio Cita": 0,   # appointment day (morning + 1h before) -> ONLY to the salesperson who owns the appointment
+    "Llamada Perdida":   1,   # the lead called and nobody answered
+    "WA Cita Pendiente": 2,   # already talked, was going to confirm the time and wrote via WA
+    "Callback":          3,   # "call me at 5"
+    "WA Respondio":      4,   # replied via WA and is not assigned
     "Nuevo Lead":        5,
     "Seguimiento":       6,
 }
 
 
 def _dialer_live():
-    """Interruptor de lanzamiento: los webhooks solo inyectan si DIALER_LIVE=1
-    en /opt/omnileads/.env_dialer. Antes del launch responden ok sin actuar
-    (los leads de esos dias los recoge el backfill)."""
+    """Launch switch: webhooks only inject if DIALER_LIVE=1
+    in /opt/omnileads/.env_dialer. Before launch they respond ok without acting
+    (the leads from those days are picked up by the backfill)."""
     try:
         for line in open("/opt/omnileads/.env_dialer"):
             if line.strip() == "DIALER_LIVE=1":
@@ -86,15 +86,15 @@ def _dialer_live():
 
 
 def _normalize_phone(phone):
-    """Deja el numero USA en 10 digitos."""
+    """Leaves the USA number in 10 digits."""
     phone = "".join(c for c in str(phone) if c.isdigit())
     if len(phone) == 11 and phone.startswith("1"):
         phone = phone[1:]
     return phone
 
 
-# Disposiciones que cuentan como "ya hablaron" — un WA Respondio posterior vuelve
-# STICKY al mismo agente (regla de negocio: solo ese vendedor puede volver a tocar el lead)
+# Dispositions that count as "already talked" — a later WA Respondio makes the lead
+# STICKY to the same agent (business rule: only that salesperson can touch the lead again)
 STICKY_SI_HABLARON = {"Agendo cita", "Va a agendar", "Llamada de vuelta programada", "Prefiere WhatsApp",
                       "Solo queria precio", "Colgo", "Error mio de ventas"}
 
@@ -111,7 +111,7 @@ def _agent_si_conversaron(contacto_id, campaign_id):
 
 
 def _get_last_agent_for_contact(contacto_id, campaign_id):
-    """Para Callbacks: el ultimo agente que disposiciono este contacto en la campana."""
+    """For Callbacks: the last agent who dispositioned this contact in the campana."""
     last_cal = CalificacionCliente.objects.filter(
         contacto_id=contacto_id,
         opcion_calificacion__campana_id=campaign_id,
@@ -124,8 +124,8 @@ TIPOS_PROTEGIDOS = ("Recordatorio Cita", "Llamada Perdida", "WA Cita Pendiente")
 
 
 def _cita_ya_paso(valor):
-    """True si `cita_inicio` (texto que manda GHL) es una fecha/hora YA pasada (hora Miami).
-    Si no se puede interpretar, False (no bloquear). Se registra el valor crudo para ajustar formatos."""
+    """True if `cita_inicio` (text sent by GHL) is a date/time that has ALREADY passed (Miami time).
+    If it can't be parsed, False (don't block). The raw value is logged to help adjust formats."""
     if not valor:
         return False
     from datetime import datetime as _dt
@@ -147,7 +147,7 @@ def _cita_ya_paso(valor):
             from dateutil import parser as _dp
             dt = _dp.parse(v)
         except Exception:
-            logger.warning("DIALER cita_inicio no interpretable: %r", v)
+            logger.warning("DIALER cita_inicio not parseable: %r", v)
             return False
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=tz)
@@ -155,7 +155,7 @@ def _cita_ya_paso(valor):
 
 
 def _agente_por_vendedor(ghl_user_id="", email=""):
-    """Agente del dialer a partir del vendedor de GHL (id de usuario o email)."""
+    """Dialer agent from the GHL salesperson (user id or email)."""
     with connection.cursor() as cur:
         if ghl_user_id:
             cur.execute("SELECT agente_id FROM dialer_agent_crm_map WHERE ghl_user_id=%s", [ghl_user_id.strip()])
@@ -170,7 +170,7 @@ def _agente_por_vendedor(ghl_user_id="", email=""):
 
 
 def _campanas_preview_del_agente(agente_id):
-    """Campanas Preview (1-5) donde el agente es miembro de cola."""
+    """Preview campanas (1-5) where the agent is a queue member."""
     with connection.cursor() as cur:
         cur.execute("SELECT DISTINCT split_part(id_campana,'_',1)::int FROM queue_member_table WHERE member_id=%s",
                     [int(agente_id)])
@@ -180,12 +180,12 @@ def _campanas_preview_del_agente(agente_id):
 def _inject_in_preview(contacto_id, phone, nombre, campaign_id, ghl_id="", tipo=""):
     orden = TIPO_ORDEN.get(tipo, 6)
     datos_dict = json.dumps({"NOMBRE": nombre, "GHL_ID": ghl_id, "TIPO": tipo})
-    # PATCH STICKY DE POR VIDA (decisión de producto): si el lead ya CONVERSO con un
-    # agente, TODA inyeccion (cualquier tipo, cualquier campana) va solo a ese agente.
+    # LIFETIME STICKY PATCH (product decision): if the lead has ALREADY TALKED with an
+    # agent, EVERY injection (any type, any campana) goes only to that agent.
     assigned_agente_id = lead_ownership.get_owner(contacto_id)
     if tipo == "Recordatorio Cita" and assigned_agente_id <= 0:
-        # regla de negocio: el recordatorio SOLO le entra al dueno del lead/cita; sin dueno no se inyecta
-        logger.warning("inject Recordatorio Cita SIN dueno: contacto=%s -> no se inyecta", contacto_id)
+        # business rule: the reminder ONLY goes to the owner of the lead/appointment; without an owner it's not injected
+        logger.warning("inject Recordatorio Cita WITHOUT owner: contacto=%s -> not injected", contacto_id)
         return False
     if assigned_agente_id <= 0:
         if tipo in ("Callback", "WA Cita Pendiente"):
@@ -196,9 +196,10 @@ def _inject_in_preview(contacto_id, phone, nombre, campaign_id, ghl_id="", tipo=
             assigned_agente_id = -1
         if assigned_agente_id > 0 and lead_ownership.agente_inactivo(assigned_agente_id):
             assigned_agente_id = -1
-    # PATCH CAMPANA DEL DUENO (decisión de producto): si el lead ya es de un vendedor y llega
-    # por una campana donde ese vendedor NO esta (ej. Pepito de Grupo 1 y el lead re-entra por
-    # Mixto), se encola en la campana del vendedor: el lead es suyo y tiene que poder verlo.
+    # OWNER'S CAMPANA PATCH (product decision): if the lead already belongs to a salesperson
+    # and arrives via a campana where that salesperson is NOT (e.g. Pepito from Grupo 1 and the
+    # lead re-enters via Mixto), it's queued in the salesperson's campana: the lead is theirs and
+    # they must be able to see it.
     if assigned_agente_id > 0:
         try:
             _camps = _campanas_preview_del_agente(assigned_agente_id)
@@ -206,10 +207,10 @@ def _inject_in_preview(contacto_id, phone, nombre, campaign_id, ghl_id="", tipo=
                 _prev = AgenteEnContacto.objects.filter(
                     contacto_id=contacto_id, campana_id__in=_camps).order_by("-modificado").first()
                 _nuevo = _prev.campana_id if _prev else min(_camps)
-                logger.info("inject: camp %s -> %s (campana del dueno %s)", campaign_id, _nuevo, assigned_agente_id)
+                logger.info("inject: camp %s -> %s (owner's campana %s)", campaign_id, _nuevo, assigned_agente_id)
                 campaign_id = _nuevo
         except Exception as _e:
-            logger.error("inject campana del dueno: %s", _e)
+            logger.error("inject owner's campana: %s", _e)
     try:
         en_llamada = AgenteEnContacto.objects.filter(
             contacto_id=contacto_id, campana_id=campaign_id,
@@ -232,9 +233,9 @@ def _inject_in_preview(contacto_id, phone, nombre, campaign_id, ghl_id="", tipo=
                     campana_id=campaign_id, estado=AgenteEnContacto.ESTADO_INICIAL,
                     es_originario=True, orden=orden)
             else:
-                # PATCH BLINDAJE PRIORIDAD 0 (decisión de producto): una Llamada Perdida o WA Cita
-                # Pendiente reciente (<24h) en cola NO se degrada por una inyeccion posterior de menor
-                # prioridad (ej. el webhook "Nuevo Lead" que llega tras crear el contacto en GHL).
+                # PRIORITY 0 SHIELD PATCH (product decision): a recent (<24h) Llamada Perdida or WA
+                # Cita Pendiente in queue is NOT downgraded by a later injection of lower
+                # priority (e.g. the "Nuevo Lead" webhook that arrives after creating the contact in GHL).
                 try:
                     _dc = json.loads(existing.datos_contacto or "{}")
                     _tipo_prev = _dc.get("TIPO") if isinstance(_dc, dict) else None
@@ -243,7 +244,7 @@ def _inject_in_preview(contacto_id, phone, nombre, campaign_id, ghl_id="", tipo=
                 _hace = (timezone.now() - existing.modificado) if existing.modificado else None
                 if (orden > existing.orden and _tipo_prev in TIPOS_PROTEGIDOS
                         and _hace is not None and _hace < timedelta(hours=24)):
-                    logger.info("inject: se conserva prioridad 0 (%s) para contacto=%s; llego '%s'",
+                    logger.info("inject: keeping priority 0 (%s) for contacto=%s; got '%s'",
                                 _tipo_prev, contacto_id, tipo)
                     orden = existing.orden
                     datos_dict = json.dumps({"NOMBRE": nombre, "GHL_ID": ghl_id, "TIPO": _tipo_prev})
@@ -262,8 +263,8 @@ def _inject_in_preview(contacto_id, phone, nombre, campaign_id, ghl_id="", tipo=
                 datos_contacto=datos_dict, telefono_contacto=phone,
                 campana_id=campaign_id, estado=AgenteEnContacto.ESTADO_INICIAL,
                 es_originario=True, orden=orden)
-        # PATCH UNA SOLA CAMPANA (decisión de producto): un lead nunca queda en cola en dos
-        # campanas Preview a la vez; al inyectarlo en una, lo que tenga en cola en las otras se cierra.
+        # SINGLE CAMPANA PATCH (product decision): a lead never stays queued in two
+        # Preview campanas at once; when injected into one, whatever it has queued in the others gets closed.
         try:
             AgenteEnContacto.objects.filter(
                 contacto_id=contacto_id, campana_id__in=[1, 2, 3, 4, 5],
@@ -294,21 +295,21 @@ def _remove_from_preview(contacto_id, campaign_ids):
 class CRMLeadActionView(APIView):
     """
     POST /api/v1/ghl/lead_action/?campana=<grupo1|compartida|agente13|agente12|grupo3>
-    Body JSON:
+    JSON Body:
       action: "inject" | "remove"
-      ghl_id: id del contacto GHL (requerido)
-      phone:  telefono (requerido si el contacto es nuevo)
-      nombre: nombre del lead
+      ghl_id: GHL contact id (required)
+      phone:  phone (required if the contact is new)
+      nombre: lead name
       tipo:   "Nuevo Lead" | "WA Respondio" | "Callback" | "Seguimiento"
-      campana: alternativa al query param
-    remove sin campana => remueve de TODAS las campanas (ej: booked/DQ).
-    Auth: Bearer token OML.
+      campana: alternative to the query param
+    remove without campana => removes from ALL campanas (e.g: booked/DQ).
+    Auth: OML Bearer token.
     """
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
 
     def post(self, request):
         data = request.data
-        # GHL manda los Custom Data anidados en "customData" — aplanarlos
+        # GHL sends the Custom Data nested under "customData" — flatten it
         if isinstance(data, dict) and not data.get("action"):
             cd = data.get("customData") or data.get("custom_data")
             if isinstance(cd, dict):
@@ -316,18 +317,18 @@ class CRMLeadActionView(APIView):
                 merged.update(cd)
                 data = merged
             else:
-                logger.warning("DIALER payload sin action; keys=%s", list(data.keys())[:25] if isinstance(data, dict) else type(data))
+                logger.warning("DIALER payload without action; keys=%s", list(data.keys())[:25] if isinstance(data, dict) else type(data))
         action = data.get("action")
         ghl_id = (data.get("ghl_id") or "").strip()
         tipo = (data.get("tipo") or "").strip()
         campana_key = (request.query_params.get("campana") or data.get("campana") or "").strip().lower()
 
         if not action or not ghl_id:
-            return Response({"error": "action y ghl_id son requeridos"}, status=400)
+            return Response({"error": "action and ghl_id are required"}, status=400)
 
         if tipo == "Recordatorio Cita" or action == "remove":
-            # visible en docker logs (WARNING) para verificar el formato que manda GHL
-            logger.warning("DIALER RECORDATORIO recibido: action=%s tipo=%s ghl_id=%s cita_inicio=%r vendedor_email=%r vendedor_ghl=%r",
+            # visible in docker logs (WARNING) to verify the format GHL sends
+            logger.warning("DIALER RECORDATORIO received: action=%s tipo=%s ghl_id=%s cita_inicio=%r vendedor_email=%r vendedor_ghl=%r",
                            action, tipo, ghl_id, data.get("cita_inicio"), data.get("vendedor_email"), data.get("vendedor_ghl"))
         if not _dialer_live():
             logger.info("DIALER gated (pre-launch): action=%s ghl_id=%s campana=%s", action, ghl_id, campana_key)
@@ -340,14 +341,14 @@ class CRMLeadActionView(APIView):
                 campaign_id = _resolver_auto(contacto)
                 ok_auto = True
             elif campana_key not in CAMPANAS:
-                return Response({"error": "campana invalida o faltante", "validas": list(CAMPANAS) + ["auto"]}, status=400)
+                return Response({"error": "invalid or missing campana", "validas": list(CAMPANAS) + ["auto"]}, status=400)
             if campana_key != "auto":
                 campaign_id = CAMPANAS[campana_key]
             nombre = (data.get("nombre") or "").strip()
             if not contacto:
                 phone = _normalize_phone(data.get("phone", ""))
                 if len(phone) != 10:
-                    return Response({"error": "phone valido (10 dig) requerido para contacto nuevo"}, status=400)
+                    return Response({"error": "valid phone (10 dig) required for a new contact"}, status=400)
                 bd = BaseDatosContacto.objects.get(id=DB_ID)
                 contacto = Contacto.objects.create(
                     telefono=phone, datos=json.dumps([nombre, tipo]),
@@ -357,8 +358,8 @@ class CRMLeadActionView(APIView):
                 nombre_final = nombre or (datos[0] if datos else "")
                 contacto.datos = json.dumps([nombre_final, tipo])
                 contacto.save(update_fields=["datos"])
-            # Colombia-style: si su ultima disposicion fue "Va a agendar" y responde WA
-            # -> WA Cita Pendiente (orden 0, sticky al mismo agente)
+            # Colombia-style: if their last disposition was "Va a agendar" and they reply via WA
+            # -> WA Cita Pendiente (orden 0, sticky to the same agent)
             if tipo == "WA Respondio" and contacto:
                 last_cal = CalificacionCliente.objects.filter(
                     contacto_id=contacto.id,
@@ -369,17 +370,17 @@ class CRMLeadActionView(APIView):
                     logger.info("DIALER upgrade WA Respondio -> WA Cita Pendiente: contacto=%s agente=%s",
                                 contacto.id, last_cal.agente_id)
             if tipo == "Recordatorio Cita" and _cita_ya_paso(data.get("cita_inicio")):
-                logger.info("Recordatorio Cita ignorado: la cita ya paso (%s) ghl_id=%s", data.get("cita_inicio"), ghl_id)
-                return Response({"status": "skipped", "reason": "cita ya paso", "cita_inicio": data.get("cita_inicio")}, status=200)
+                logger.info("Recordatorio Cita ignored: the appointment already passed (%s) ghl_id=%s", data.get("cita_inicio"), ghl_id)
+                return Response({"status": "skipped", "reason": "appointment already passed", "cita_inicio": data.get("cita_inicio")}, status=200)
             if tipo == "Recordatorio Cita" and lead_ownership.get_owner(contacto.id) <= 0:
-                # la cita ya implica conversacion: el vendedor de la cita queda dueno del lead
+                # the appointment already implies conversation: the appointment's salesperson becomes the lead owner
                 _ag = _agente_por_vendedor(str(data.get("vendedor_ghl") or ""), str(data.get("vendedor_email") or ""))
                 if _ag > 0:
-                    lead_ownership.set_owner(contacto.id, _ag, "Recordatorio Cita (vendedor de la cita)")
+                    lead_ownership.set_owner(contacto.id, _ag, "Recordatorio Cita (appointment's salesperson)")
                 else:
-                    logger.warning("Recordatorio Cita sin dueno ni vendedor mapeable: ghl_id=%s vendedor_ghl=%s email=%s",
+                    logger.warning("Recordatorio Cita without owner or mappable salesperson: ghl_id=%s vendedor_ghl=%s email=%s",
                                    ghl_id, data.get("vendedor_ghl"), data.get("vendedor_email"))
-                    return Response({"status": "skipped", "reason": "sin dueno: manda vendedor_ghl o vendedor_email"}, status=200)
+                    return Response({"status": "skipped", "reason": "no owner: send vendedor_ghl or vendedor_email"}, status=200)
             datos_list = json.loads(contacto.datos) if contacto.datos else []
             ok = _inject_in_preview(contacto.id, contacto.telefono,
                                     datos_list[0] if datos_list else "",
@@ -391,20 +392,20 @@ class CRMLeadActionView(APIView):
 
         elif action == "remove":
             if not contacto:
-                return Response({"error": "contacto no encontrado"}, status=404)
+                return Response({"error": "contact not found"}, status=404)
             ids = [CAMPANAS[campana_key]] if campana_key in CAMPANAS else list(CAMPANAS.values())
             ok = _remove_from_preview(contacto.id, ids)
             if ok:
                 return Response({"status": "ok", "contact_id": contacto.id, "campanas": ids})
             return Response({"error": "remove failed"}, status=500)
 
-        return Response({"error": "action invalido"}, status=400)
+        return Response({"error": "invalid action"}, status=400)
 
 
 class EnLlamadaView(APIView):
-    """GET /api/v1/agente/en_llamada/ -> {en_llamada: bool}. Portado de otro cliente
-    (control de flujo de la pagina de disposicion). Llamada activa = CONTACT_NUMBER
-    seteado en Redis y STATUS sin ACW."""
+    """GET /api/v1/agente/en_llamada/ -> {en_llamada: bool}. Ported from another client
+    (flow control for the disposition page). Active call = CONTACT_NUMBER
+    set in Redis and STATUS without ACW."""
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
 
     def get(self, request):
@@ -429,7 +430,7 @@ class EnLlamadaView(APIView):
 
 
 class ContactoHistorialView(APIView):
-    """GET /api/v1/contact_history/?contacto_id=ID -> ultimas 10 disposiciones (panel preview)."""
+    """GET /api/v1/contact_history/?contacto_id=ID -> last 10 dispositions (preview panel)."""
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
 
     def get(self, request):
@@ -440,7 +441,7 @@ class ContactoHistorialView(APIView):
         try:
             contacto_id = int(contacto_id)
         except ValueError:
-            return Response({"error": "contacto_id invalido"}, status=400)
+            return Response({"error": "invalid contacto_id"}, status=400)
         tz = ZoneInfo("America/New_York")
         cals = CalificacionCliente.objects.filter(contacto_id=contacto_id).select_related(
             "opcion_calificacion", "agente__user").order_by("-modified")[:10]
@@ -456,25 +457,25 @@ class ContactoHistorialView(APIView):
 
 
 class SkipLeadView(APIView):
-    """POST /api/v1/agente/skip_lead/ {contacto_id, campana_id, razon}: salta un lead
-    WA Respondio / WA Cita Pendiente sin marcacion ni disposicion (AEC -> FINALIZADO)."""
+    """POST /api/v1/agente/skip_lead/ {contacto_id, campana_id, razon}: skips a
+    WA Respondio / WA Cita Pendiente lead without dialing or disposition (AEC -> FINALIZADO)."""
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
 
     def post(self, request):
-        # SALTAR DESACTIVADO (decisión de producto): nadie puede saltar leads; se registra el intento
-        logger.warning("DIALER SkipLead BLOQUEADO: agente=%s data=%s", getattr(request.user, "username", "?"), dict(request.data) if hasattr(request.data, "items") else request.data)
-        return Response({"error": "Saltar leads esta desactivado"}, status=403)
+        # SKIP DISABLED (product decision): nobody can skip leads; the attempt is logged
+        logger.warning("DIALER SkipLead BLOCKED: agente=%s data=%s", getattr(request.user, "username", "?"), dict(request.data) if hasattr(request.data, "items") else request.data)
+        return Response({"error": "Skipping leads is disabled"}, status=403)
         contacto_id = request.data.get("contacto_id")
         campana_id = request.data.get("campana_id")
         razon = (request.data.get("razon") or "").strip()
         if not contacto_id or not campana_id or not razon:
-            return Response({"error": "contacto_id, campana_id y razon son requeridos"}, status=400)
+            return Response({"error": "contacto_id, campana_id and razon are required"}, status=400)
         aec = AgenteEnContacto.objects.filter(contacto_id=contacto_id, campana_id=campana_id).exclude(
             estado=AgenteEnContacto.ESTADO_FINALIZADO).first()
         if not aec:
-            return Response({"error": "AEC no encontrado o ya finalizado"}, status=404)
+            return Response({"error": "AEC not found or already finished"}, status=404)
         if aec.estado == AgenteEnContacto.ESTADO_ASIGNADO:
-            return Response({"error": "Hay una llamada activa - no se puede saltar"}, status=409)
+            return Response({"error": "There is an active call - cannot skip"}, status=409)
         datos = aec.datos_contacto or {}
         if isinstance(datos, str):
             try:
@@ -482,7 +483,7 @@ class SkipLeadView(APIView):
             except Exception:
                 datos = {}
         if datos.get("TIPO", "") not in ("WA Respondio", "WA Cita Pendiente"):
-            return Response({"error": "Solo se pueden saltar leads WA Respondio / WA Cita Pendiente"}, status=400)
+            return Response({"error": "Only WA Respondio / WA Cita Pendiente leads can be skipped"}, status=400)
         aec.estado = AgenteEnContacto.ESTADO_FINALIZADO
         aec.save(update_fields=["estado"])
         agente = request.user.username if request.user and request.user.is_authenticated else "?"
@@ -500,16 +501,16 @@ class SkipLeadView(APIView):
 
 
 def _ghl_contacto_por_telefono(phone10, nombre_si_nuevo="Llamada perdida"):
-    """Busca/crea el contacto en GHL por telefono (POST /contacts/upsert) y le pone la etiqueta
-    llamada-perdida. Devuelve (ghl_id, es_nuevo). (decisión de producto: toda llamada perdida
-    debe existir en el CRM para poder asignarla y mandarle recordatorios.)"""
+    """Finds/creates the contact in GHL by phone (POST /contacts/upsert) and applies the
+    llamada-perdida tag. Returns (ghl_id, is_new). (product decision: every missed call
+    must exist in the CRM so it can be assigned and sent reminders.)"""
     try:
         import requests
         from api_app.views import crm_dispositions as _d
         cfg = _d._env()
         token, loc = cfg.get("GHL_API_TOKEN"), cfg.get("GHL_LOCATION_ID")
         if not token or not loc:
-            logger.error("DIALER missed GHL: sin token/location")
+            logger.error("DIALER missed GHL: missing token/location")
             return "", False
         H = {"Authorization": "Bearer %s" % token, "Version": _d.GHL_VERSION,
              "Content-Type": "application/json"}
@@ -534,31 +535,31 @@ def _ghl_contacto_por_telefono(phone10, nombre_si_nuevo="Llamada perdida"):
 
 
 class CRMMissedCallView(APIView):
-    """POST /api/v1/dialer/missed_call/ {from: <caller>} — llamada ENTRANTE NO contestada
-    (decisión de producto): el lead entra a cola como "Llamada Perdida" (orden 0, se devuelve de
-    primero). Con dueño -> solo al dueño y en su campana; sin dueño -> a todos (Grupo 1 o la
-    campana donde ya estaba). Numero desconocido -> se crea el contacto. No pasa por el gate."""
+    """POST /api/v1/dialer/missed_call/ {from: <caller>} — INBOUND call NOT answered
+    (product decision): the lead enters the queue as "Llamada Perdida" (orden 0, delivered
+    first). With an owner -> only to the owner and in their campana; without an owner -> to everyone
+    (Grupo 1 or the campana it was already in). Unknown number -> the contact gets created. Bypasses the gate."""
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
 
     def post(self, request):
         data = request.data if isinstance(request.data, dict) else {}
         phone = _normalize_phone(data.get("from") or request.query_params.get("from") or "")
         if len(phone) != 10:
-            return Response({"error": "from invalido"}, status=400)
+            return Response({"error": "invalid from"}, status=400)
         tipo = "Llamada Perdida"
         ids = list(Contacto.objects.filter(bd_contacto_id=DB_ID, telefono=phone)
                    .order_by("-id").values_list("id", flat=True))
         contacto = None
-        for cid in ids:                      # preferir el contacto que YA tiene dueño
+        for cid in ids:                      # prefer the contact that ALREADY has an owner
             if lead_ownership.get_owner(cid) > 0:
                 contacto = Contacto.objects.get(id=cid)
                 break
         if contacto is None and ids:
             contacto = Contacto.objects.get(id=ids[0])
-        # CRM: el contacto debe existir en GHL (buscar por telefono; crear si no) + etiqueta
+        # CRM: the contact must exist in GHL (search by phone; create if not) + tag
         ghl_id_actual = (contacto.id_externo or "").strip() if contacto else ""
         if ghl_id_actual and not ghl_id_actual.startswith("DEMO"):
-            _ghl_contacto_por_telefono(phone)          # existe: solo etiqueta llamada-perdida
+            _ghl_contacto_por_telefono(phone)          # exists: just apply the llamada-perdida tag
             ghl_nuevo = ghl_id_actual
         else:
             ghl_nuevo, _ = _ghl_contacto_por_telefono(phone)
@@ -591,8 +592,8 @@ class CRMMissedCallView(APIView):
 
 class CRMCallOutcomeView(APIView):
     """GET /api/v1/agente/call_outcome/?contacto_id=N -> {answered, attempts, last_event, last_duration}
-    del agente logueado con ese contacto en la ultima ventana. El formulario de disposicion lo usa
-    para dejar solo 'No contesto'/'Numero equivocado' cuando la llamada no fue contestada."""
+    for the logged-in agent with that contact in the last window. The disposition form uses it
+    to only leave 'No contesto'/'Numero equivocado' when the call wasn't answered."""
     authentication_classes = (SessionAuthentication, ExpiringTokenAuthentication)
 
     def get(self, request):
