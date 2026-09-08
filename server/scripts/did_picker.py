@@ -55,7 +55,7 @@ def inbound_campana(caller):
 
 
 def missed(caller):
-    """Inbound NOT answered -> POST /api/v1/dialer/missed_call/ (lead enters as Llamada Perdida, orden 0)."""
+    """Inbound NOT answered -> POST /api/v1/dialer/missed_call/ (lead enters as Llamada Perdida, order 0)."""
     tel = re.sub(r'\D', '', caller)[-10:]
     if len(tel) < 10:
         return ''

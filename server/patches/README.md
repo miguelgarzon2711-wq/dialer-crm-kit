@@ -1,110 +1,110 @@
-# Parches sobre OMniLeads
+# Patches on top of OMniLeads
 
-Este kit **no redistribuye OMniLeads**. Lo que hay acá son los cambios puntuales que
-hay que aplicarle a los archivos que ya trae tu instalación, con el bloque de código
-exacto y la explicación de por qué existe cada uno.
+This kit **does not redistribute OMniLeads**. What's here are the specific changes that
+need to be applied to the files your installation already ships, with the exact code
+block and an explanation of why each one exists.
 
-Los bloques están en:
+The blocks live in:
 
-- `patches_django.txt` — cambios a los archivos Python, plantillas y JavaScript de OMniLeads.
-- `patches_dialplan.txt` — cambios al plan de marcación de Asterisk.
+- `patches_django.txt` — changes to OMniLeads' Python files, templates and JavaScript.
+- `patches_dialplan.txt` — changes to the Asterisk dialplan.
 
-Cada bloque viene con el número de línea de referencia y sus líneas de contexto. Los
-números de línea corresponden a **una** versión de OMniLeads: en la tuya van a estar
-corridos. **No apliques por número de línea: buscá la función o el bloque por nombre.**
+Each block comes with a reference line number and its context lines. The line
+numbers correspond to **one** version of OMniLeads: in yours they'll be shifted.
+**Don't apply by line number: look up the function or block by name.**
 
 ---
 
-## Cómo aplicar un parche
+## How to apply a patch
 
-1. Copiá el archivo original desde el contenedor al host:
+1. Copy the original file from the container to the host:
    ```bash
-   docker cp prod-env-django-app-1:/opt/omnileads/ominicontacto/<ruta>/<archivo>.py \
-             /opt/dialer-kit/patches/<archivo>.py
+   docker cp prod-env-django-app-1:/opt/omnileads/ominicontacto/<path>/<file>.py \
+             /opt/dialer-kit/patches/<file>.py
    ```
-2. Editá la copia del host aplicando el bloque correspondiente.
-3. Validá la sintaxis. **Este paso no es opcional:** un error acá tumba Django entero.
+2. Edit the host copy, applying the corresponding block.
+3. Validate the syntax. **This step is not optional:** a mistake here brings down all of Django.
    ```bash
-   python3 -c "import ast; ast.parse(open('<archivo>.py').read())" && echo OK
+   python3 -c "import ast; ast.parse(open('<file>.py').read())" && echo OK
    ```
-4. Copiala de vuelta y reiniciá:
+4. Copy it back and restart:
    ```bash
-   docker cp /opt/dialer-kit/patches/<archivo>.py \
-             prod-env-django-app-1:/opt/omnileads/ominicontacto/<ruta>/<archivo>.py
+   docker cp /opt/dialer-kit/patches/<file>.py \
+             prod-env-django-app-1:/opt/omnileads/ominicontacto/<path>/<file>.py
    docker restart prod-env-django-app-1
    ```
-5. **Agregá el bloque a `restore_patches.sh`** para que sobreviva a los reinicios.
-   Si te salteás este paso, el parche desaparece solo y nadie va a entender por qué.
-6. Verificá que la aplicación levantó:
+5. **Add the block to `restore_patches.sh`** so it survives restarts.
+   If you skip this step, the patch disappears on its own and nobody will understand why.
+6. Verify the application came back up:
    ```bash
-   curl -s -o /dev/null -w "%{http_code}\n" https://<TU_DOMINIO>/accounts/login/
+   curl -s -o /dev/null -w "%{http_code}\n" https://<YOUR_DOMAIN>/accounts/login/
    ```
-   Tiene que devolver `200`. Si no, revisá los registros del contenedor.
+   It has to return `200`. If not, check the container logs.
 
-Para los cambios de JavaScript hay dos pasos extra después de copiar, porque los
-archivos estáticos se sirven comprimidos:
+For JavaScript changes there are two extra steps after copying, because static
+files are served compressed:
 ```bash
 docker exec prod-env-django-app-1 python3 /opt/omnileads/ominicontacto/manage.py collectstatic --noinput
 docker exec prod-env-django-app-1 python3 /opt/omnileads/ominicontacto/manage.py compress --force
 ```
 
-Para los cambios de plan de marcación no hace falta reiniciar nada:
+For dialplan changes there's no need to restart anything:
 ```bash
 docker exec prod-env-acd-1 asterisk -rx "dialplan reload"
 ```
 
 ---
 
-## Qué hace cada parche y por qué
+## What each patch does and why
 
-### En `models.py`
+### In `models.py`
 
-| Parche | Qué resuelve |
+| Patch | What it solves |
 |---|---|
-| **No auto-finalizar campañas** | OMniLeads cierra sola una campaña de tipo Preview cuando se le acaban los contactos. Con leads que entran de a poco durante el día, la campaña se cierra a media mañana y deja de recibir. |
-| **Botón unificado de entrega** | De fábrica, el agente elige campaña y después pide lead. Con este cambio, un solo botón entrega el lead de mayor prioridad **entre todas** sus campañas. Menos decisiones para el vendedor, mejor orden de marcación. |
-| **Prioridad pura** | Respeta estrictamente el campo de prioridad al elegir el siguiente lead, en vez de mezclarlo con otros criterios. |
-| **Varios registros por contacto** | Con reinyecciones, un mismo contacto puede tener varios registros de relación agente-contacto. Sin esto, guardar la disposición de un lead reinyectado da error. |
-| **Preservar el identificador externo** | Mantiene el id del contacto en el CRM dentro de la tarjeta del lead, para poder abrirlo desde la consola. |
-| **Validar antes de finalizar** | Corre la validación de la disposición **antes** de cerrar la relación agente-contacto, no después. Si valida después, ya es tarde: el lead quedó cerrado con una disposición inválida. |
+| **Don't auto-finalize campaigns** | OMniLeads closes a Preview-type campaign on its own once it runs out of contacts. With leads trickling in throughout the day, the campaign closes by mid-morning and stops receiving. |
+| **Unified delivery button** | Out of the box, the agent picks a campaign and then requests a lead. With this change, a single button delivers the highest-priority lead **across all** their campaigns. Fewer decisions for the rep, better dialing order. |
+| **Pure priority** | Strictly respects the priority field when picking the next lead, instead of mixing it with other criteria. |
+| **Multiple records per contact** | With re-injections, the same contact can have several agent-contact relationship records. Without this, saving the disposition of a re-injected lead throws an error. |
+| **Preserve the external identifier** | Keeps the CRM's contact id inside the lead card, so it can be opened from the console. |
+| **Validate before finalizing** | Runs the disposition validation **before** closing the agent-contact relationship, not after. If it validates after, it's already too late: the lead was closed with an invalid disposition. |
 
 ### Number masking (several files)
 
-El vendedor nunca ve el teléfono completo del lead: ve `***-***-1234`. Hay que
-enmascarar en **cinco** lugares, y si te olvidás de uno el número se filtra por ahí:
+The rep never sees the lead's full phone number: they see `***-***-1234`. It has to be
+masked in **five** places, and if you miss one the number leaks through there:
 
-1. La tarjeta del lead (`views_campana_preview.py`).
-2. El formulario de disposición (`views_calificacion_cliente.py`).
-3. El teléfono del navegador, que recibe el número por la señalización (plan de marcación).
-4. Al marcar desde la consola: llega enmascarado y hay que **restaurar el real** desde
-   la base antes de llamar (`views_agente.py`).
-5. Al guardar la disposición: mismo caso, restaurar el real (`views_calificacion_cliente.py`).
+1. The lead card (`views_campana_preview.py`).
+2. The disposition form (`views_calificacion_cliente.py`).
+3. The browser phone, which receives the number via signaling (dialplan).
+4. When dialing from the console: it arrives masked and the **real one must be restored**
+   from the database before calling (`views_agente.py`).
+5. When saving the disposition: same case, restore the real one (`views_calificacion_cliente.py`).
 
-### Otros
+### Other
 
-| Parche | Archivo | Qué resuelve |
+| Patch | File | What it solves |
 |---|---|---|
-| **Solo dígitos al marcar** | `views_agente.py` | Un `+` o un espacio mata la llamada en silencio. Limpia el número pase lo que pase con el dato de origen. |
+| **Digits only when dialing** | `views_agente.py` | A `+` or a space kills the call in silence. Cleans the number no matter what the source data looks like. |
 | **Dispositions in alphabetical order** | `forms_base.py` | Out of the box they come sorted by internal id. Reps pick them by position; if they move around, wrong dispositions get filed. |
-| **Dominio propio permitido** | `settings` | Sin esto, cualquier envío de formulario desde tu dominio devuelve error 403. |
-| **Duración del token de API** | `settings` | El token de API dura 9 horas de fábrica. Para webhooks que corren para siempre, se extiende a un año. |
-| **Botón unificado (interfaz)** | `campanasPreviewAgente.js` | La parte visual del botón único. Requiere los dos comandos de archivos estáticos de arriba. |
-| **Liberar lead en pausa** | `agent_activity.py` | Si el agente entra en pausa con un lead abierto, el lead se libera en vez de quedar bloqueado. |
-| **Cuatro procesos de aplicación** | `oml_uwsgi.ini` | De fábrica viene con uno solo: con varios agentes, una petición lenta bloquea a todos. |
+| **Own domain allowed** | `settings` | Without this, any form submission from your domain returns a 403 error. |
+| **API token lifetime** | `settings` | The API token lasts 9 hours out of the box. For webhooks that run forever, it's extended to a year. |
+| **Unified button (interface)** | `campanasPreviewAgente.js` | The visual part of the single button. Requires the two static-file commands above. |
+| **Release lead on pause** | `agent_activity.py` | If the agent goes on pause with a lead open, the lead is released instead of staying locked. |
+| **Four application processes** | `oml_uwsgi.ini` | Out of the box it ships with just one: with several agents, one slow request blocks everyone. |
 
 ### In the dialplan (`patches_dialplan.txt`)
 
-| Parche | Qué resuelve |
+| Patch | What it solves |
 |---|---|
-| **Selector de caller ID** | Antes de marcar, consulta al servicio de rotación qué número usar para ese lead. Tiene tiempo de espera corto y una lista de respaldo: si el servicio no responde, la llamada igual sale. |
-| **Formato internacional garantizado** | Algunos proveedores exigen el `+` con código de país. Se asegura sin depender de la configuración de prefijos. |
-| **Enmascarado hacia el agente** | En el tramo hacia el vendedor, el número viaja enmascarado. El tramo hacia el proveedor y los registros mantienen el número real. |
-| **Ruta de salida manual** | El generador de rutas de OMniLeads no arma bien este contexto. Hay que escribirlo a mano (está en `../asterisk/extensions_outbound_route.conf`). |
-| **Números de prueba internos** | Desvía un rango de números falsos a contextos locales que simulan eco, buzón de voz y nadie-contesta. Sirve para probar el sistema sin gastar minutos ni molestar a nadie. Muy recomendable para las demostraciones. |
+| **Caller ID selector** | Before dialing, it asks the rotation service which number to use for that lead. It has a short timeout and a fallback list: if the service doesn't respond, the call goes out anyway. |
+| **Guaranteed international format** | Some providers require the `+` with the country code. It's ensured without depending on the prefix configuration. |
+| **Masked towards the agent** | On the leg towards the salesperson, the number travels masked. The leg towards the provider and the records keep the real number. |
+| **Manual outbound route** | OMniLeads' route generator doesn't build this context correctly. It has to be written by hand (it's in `../asterisk/extensions_outbound_route.conf`). |
+| **Internal test numbers** | Redirects a range of fake numbers to local contexts that simulate echo, voicemail and nobody-answers. Useful for testing the system without spending minutes or bothering anyone. Highly recommended for demos. |
 
 ---
 
-## Recomendación
+## Recommendation
 
-Aplicá los parches de a uno, verificando después de cada uno. Si aplicás cinco
-juntos y algo se rompe, no vas a saber cuál fue.
+Apply the patches one at a time, verifying after each one. If you apply five
+together and something breaks, you won't know which one it was.

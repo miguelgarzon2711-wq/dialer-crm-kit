@@ -467,7 +467,7 @@ class AppCalificarView(APIView):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CALL FLOW SAME AS THE WEB CONSOLE (2026-09-05, video from the operator)
-#   hang up -> ACW (pausa '0') + OML:CALIFICACION:LLAMADA family with CALIFICADA=FALSE
+#   hang up -> ACW (pause '0') + OML:CALIFICACION:LLAMADA family with CALIFICADA=FALSE
 #   call    -> if the last call is not dispositioned: 409 "You cannot make a new
 #              call until you disposition the last call." (same notice as the web)
 #   save    -> callid on the calificacion, CALIFICADA=TRUE, leaves ACW -> double dial

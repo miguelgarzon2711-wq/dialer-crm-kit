@@ -67,34 +67,34 @@ fi
 if ! docker exec prod-env-django-app-1 grep -q 'processes=4' /opt/omnileads/run/oml_uwsgi.ini 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/oml_uwsgi.ini.patched prod-env-django-app-1:/opt/omnileads/run/oml_uwsgi.ini
   docker restart prod-env-django-app-1
-  echo "$(date): uwsgi re-parcheado" >> /var/log/restore_patches.log
+  echo "$(date): uwsgi re-patched" >> /var/log/restore_patches.log
 fi
 
-# Boton unificado: JS consola + rebuild bundle (2026-08-22)
+# Unified button: console JS + bundle rebuild (2026-08-22)
 if ! docker exec prod-env-django-app-1 grep -q campEfectiva /opt/omnileads/ominicontacto/ominicontacto_app/static/ominicontacto/JS/campanasPreviewAgente.js 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/campanasPreviewAgente.js.patched prod-env-django-app-1:/opt/omnileads/ominicontacto/ominicontacto_app/static/ominicontacto/JS/campanasPreviewAgente.js
   docker exec prod-env-django-app-1 sh -c 'cd /opt/omnileads/ominicontacto && python3 manage.py collectstatic --noinput >/dev/null 2>&1 && python3 manage.py compress --force >/dev/null 2>&1'
-  echo "$(date): JS boton unificado restaurado + bundle regenerado" >> /var/log/restore_patches.log
+  echo "$(date): unified button JS restored + bundle regenerated" >> /var/log/restore_patches.log
 fi
 
 # Override DID inbound Telnyx (2026-08-22)
 if ! docker exec prod-env-acd-1 grep -q 'Workaround Telnyx' /etc/asterisk/oml_extensions_override.conf 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/extensions_override.conf prod-env-acd-1:/etc/asterisk/oml_extensions_override.conf
   docker exec prod-env-acd-1 asterisk -rx 'dialplan reload'
-  echo "$(date): override DID inbound restaurado" >> /var/log/restore_patches.log
+  echo "$(date): override DID inbound restored" >> /var/log/restore_patches.log
 fi
 
-# Endpoints PJSIP de agentes (append-only, fuente = DB) (2026-08-25)
+# Agent PJSIP endpoints (append-only, source = DB) (2026-08-25)
 bash /root/sync_agents_pjsip.sh >> /var/log/restore_patches.log 2>&1
 
 # CSRF trusted origins (2026-08-25)
 if ! docker exec prod-env-django-app-1 grep -q 'CSRF_TRUSTED' /opt/omnileads/ominicontacto/ominicontacto/settings/oml_settings_local.py 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/oml_settings_local.py.patched prod-env-django-app-1:/opt/omnileads/ominicontacto/ominicontacto/settings/oml_settings_local.py
   docker restart prod-env-django-app-1
-  echo "$(date): CSRF settings restaurados" >> /var/log/restore_patches.log
+  echo "$(date): CSRF settings restored" >> /var/log/restore_patches.log
 fi
 
-# Parches paridad otro cliente: pausa libera ENTREGADO + race ACW 5s (2026-08-26)
+# Feature-parity patches: pause releases ENTREGADO + 5s ACW race
 if ! docker exec prod-env-django-app-1 grep -q 'liberar contacto ENTREGADO' /opt/omnileads/ominicontacto/ominicontacto_app/services/asterisk/agent_activity.py 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/agent_activity.py.patched prod-env-django-app-1:/opt/omnileads/ominicontacto/ominicontacto_app/services/asterisk/agent_activity.py
   docker restart prod-env-django-app-1
@@ -108,21 +108,21 @@ fi
 if ! docker exec prod-env-django-app-1 grep -q 'callInitiatedTimer' /opt/omnileads/ominicontacto/ominicontacto_app/templates/formulario/calificacion_create_update_agente.html 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/calificacion_create_update_agente.html prod-env-django-app-1:/opt/omnileads/ominicontacto/ominicontacto_app/templates/formulario/calificacion_create_update_agente.html
   docker restart prod-env-django-app-1
-  echo "$(date): template disposicion restaurado" >> /var/log/restore_patches.log
+  echo "$(date): disposition template restored" >> /var/log/restore_patches.log
 fi
 
 # SIP proxy TLS config (correct certs - without this the softphone reports SIP Proxy not responding)
 if ! docker exec prod-env-kamailio-webrtc-1 grep -q 'certs/cert.pem' /etc/kamailio/tls.cfg 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/kamailio_tls.cfg.patched prod-env-kamailio-webrtc-1:/etc/kamailio/tls.cfg
   docker restart prod-env-kamailio-webrtc-1
-  echo "$(date): kamailio tls.cfg restaurado" >> /var/log/restore_patches.log
+  echo "$(date): kamailio tls.cfg restored" >> /var/log/restore_patches.log
 fi
 
-# nginx /ws TLS legacy hacia kamailio (2026-09-02) — sin esto: SIP Proxy no responde
+# legacy nginx /ws TLS towards kamailio - without this: SIP Proxy does not respond
 if ! docker exec prod-env-nginx-1 grep -q 'proxy_ssl_protocols' /etc/nginx/conf.d/environment/oml_env.conf 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/nginx/oml_env.conf.patched prod-env-nginx-1:/etc/nginx/conf.d/environment/oml_env.conf
   docker exec prod-env-nginx-1 nginx -s reload
-  echo "$(date): nginx /ws restaurado" >> /var/log/restore_patches.log
+  echo "$(date): nginx /ws restored" >> /var/log/restore_patches.log
 fi
 
 # Preview template with the CRM link and disposition history
@@ -131,26 +131,26 @@ if ! docker exec prod-env-django-app-1 grep -q 'CRM_LOCATION_ID' /opt/omnileads/
   docker restart prod-env-django-app-1
 fi
 
-# Ruta saliente oml-outr-1 (generador roto) (2026-09-03)
+# Outbound route oml-outr-1 (broken generator) (2026-09-03)
 if ! docker exec prod-env-acd-1 grep -q '^\[oml-outr\]' /etc/asterisk/oml_extensions_outr_override.conf 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/extensions_outbound_route.conf prod-env-acd-1:/etc/asterisk/oml_extensions_outr_override.conf
   docker exec prod-env-acd-1 asterisk -rx 'dialplan reload'
-  echo "$(date): oml-outr-1 restaurado" >> /var/log/restore_patches.log
+  echo "$(date): oml-outr-1 restored" >> /var/log/restore_patches.log
 fi
 
 # PER-REP INBOUND STICKY: make sure Redis holds the personal inbound campaigns
 if [ -f /root/agent_inbound.json ]; then python3 /root/inbound_redis_sync.py >> /var/log/restore_patches.log 2>&1; fi
 
-# MASCARA + ORDEN ALFABETICO (2026-09-03): archivos OML parcheados
+# MASK + ALPHABETICAL ORDER (2026-09-03): patched OML files
 if ! docker exec prod-env-django-app-1 grep -q 'PATCH MASCARA' /opt/omnileads/ominicontacto/ominicontacto_app/views_campana_preview.py 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/views_campana_preview.py.patched prod-env-django-app-1:/opt/omnileads/ominicontacto/ominicontacto_app/views_campana_preview.py
   docker cp /opt/dialer-kit/patches/forms_base.py.patched prod-env-django-app-1:/opt/omnileads/ominicontacto/ominicontacto_app/forms/base.py
-  echo "$(date): mascara/orden restaurados" >> /var/log/restore_patches.log
+  echo "$(date): mask/order restored" >> /var/log/restore_patches.log
 fi
 
-# MASCARA en formulario de disposicion (2026-09-03)
+# MASK in the disposition form (2026-09-03)
 if ! docker exec prod-env-django-app-1 grep -q 'PATCH MASCARA' /opt/omnileads/ominicontacto/ominicontacto_app/views_agente.py 2>/dev/null; then
   docker cp /opt/dialer-kit/patches/views_calificacion_cliente.py.patched prod-env-django-app-1:/opt/omnileads/ominicontacto/ominicontacto_app/views_calificacion_cliente.py
   docker cp /opt/dialer-kit/patches/views_agente.py.patched prod-env-django-app-1:/opt/omnileads/ominicontacto/ominicontacto_app/views_agente.py
-  echo "$(date): mascara formulario restaurada" >> /var/log/restore_patches.log
+  echo "$(date): mask form restored" >> /var/log/restore_patches.log
 fi

@@ -1,4 +1,4 @@
-; Queues campañas Preview Dialer (2026-08-22)
+; Preview campaign queues
 [1_Grupo 1]
 strategy=ringall
 timeout=25
